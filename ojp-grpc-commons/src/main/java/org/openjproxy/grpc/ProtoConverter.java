@@ -345,13 +345,20 @@ public class ProtoConverter {
             case TIMESTAMP:
             case URL:
             case ROW_ID:
-                // These are complex objects that were serialized
+            case BOOLEAN:
+            case BYTE:
+            case SHORT:
+            case INT:
+            case LONG:
+            case FLOAT:
+            case DOUBLE:
+            case STRING:
+                // These types might be serialized (from legacy code or special cases)
+                // Attempt to deserialize
                 return true;
             default:
-                // For primitive types (BOOLEAN, INTEGER, LONG, FLOAT, DOUBLE, STRING)
-                // that are handled by explicit proto fields, we shouldn't reach here
-                // But if we do, don't deserialize
-                return false;
+                // For unknown types, try to deserialize
+                return true;
         }
     }
     
