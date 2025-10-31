@@ -5,7 +5,7 @@ import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
-import org.openjproxy.grpc.SerializationHandler;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.client.StatementServiceGrpcClient;
 
@@ -15,6 +15,8 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 
 import static org.openjproxy.jdbc.Constants.PASSWORD;
@@ -58,21 +60,24 @@ public class Driver implements java.sql.Driver {
         
         // Load ojp.properties file and extract datasource-specific configuration
         Properties ojpProperties = loadOjpPropertiesForDataSource(dataSourceName);
-        ByteString propertiesBytes = ByteString.EMPTY;
+        
+        ConnectionDetails.Builder connBuilder = ConnectionDetails.newBuilder()
+                .setUrl(cleanUrl)
+                .setUser((String) ((info.get(USER) != null)? info.get(USER) : ""))
+                .setPassword((String) ((info.get(PASSWORD) != null) ? info.get(PASSWORD) : ""))
+                .setClientUUID(ClientUUID.getUUID());
+        
         if (ojpProperties != null && !ojpProperties.isEmpty()) {
-            propertiesBytes = ByteString.copyFrom(SerializationHandler.serialize(ojpProperties));
+            // Convert Properties to Map<String, Object>
+            Map<String, Object> propertiesMap = new HashMap<>();
+            for (String key : ojpProperties.stringPropertyNames()) {
+                propertiesMap.put(key, ojpProperties.getProperty(key));
+            }
+            connBuilder.addAllProperties(ProtoConverter.propertiesToProto(propertiesMap));
             log.debug("Loaded ojp.properties with {} properties for dataSource: {}", ojpProperties.size(), dataSourceName);
         }
         
-        SessionInfo sessionInfo = statementService
-                .connect(ConnectionDetails.newBuilder()
-                        .setUrl(cleanUrl)
-                        .setUser((String) ((info.get(USER) != null)? info.get(USER) : ""))
-                        .setPassword((String) ((info.get(PASSWORD) != null) ? info.get(PASSWORD) : ""))
-                        .setClientUUID(ClientUUID.getUUID())
-                        .setProperties(propertiesBytes)
-                        .build()
-                );
+        SessionInfo sessionInfo = statementService.connect(connBuilder.build());
         log.debug("Returning new Connection with sessionInfo: {}", sessionInfo);
         return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(cleanUrl));
     }

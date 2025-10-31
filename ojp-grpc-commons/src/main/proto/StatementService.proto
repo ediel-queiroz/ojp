@@ -7,8 +7,87 @@ message ConnectionDetails {
     string user = 2;
     string password = 3;
     string clientUUID = 4;
-    bytes properties = 6;
+    repeated PropertyEntry properties = 6;
     bool isXA = 7;  // Flag to indicate XA connection
+}
+
+// Enum representing parameter types for JDBC
+enum ParameterTypeProto {
+    PT_NULL = 0;
+    PT_BOOLEAN = 1;
+    PT_BYTE = 2;
+    PT_SHORT = 3;
+    PT_INT = 4;
+    PT_LONG = 5;
+    PT_FLOAT = 6;
+    PT_DOUBLE = 7;
+    PT_BIG_DECIMAL = 8;
+    PT_STRING = 9;
+    PT_BYTES = 10;
+    PT_DATE = 11;
+    PT_TIME = 12;
+    PT_TIMESTAMP = 13;
+    PT_ASCII_STREAM = 14;
+    PT_UNICODE_STREAM = 15;
+    PT_BINARY_STREAM = 16;
+    PT_OBJECT = 17;
+    PT_CHARACTER_READER = 18;
+    PT_REF = 19;
+    PT_BLOB = 20;
+    PT_CLOB = 21;
+    PT_ARRAY = 22;
+    PT_URL = 23;
+    PT_ROW_ID = 24;
+    PT_N_STRING = 25;
+    PT_N_CHARACTER_STREAM = 26;
+    PT_N_CLOB = 27;
+    PT_SQL_XML = 28;
+}
+
+// Message representing a single value in a parameter
+message ParameterValue {
+    oneof value {
+        bool bool_value = 1;
+        int32 int_value = 2;
+        int64 long_value = 3;
+        float float_value = 4;
+        double double_value = 5;
+        string string_value = 6;
+        bytes bytes_value = 7;
+    }
+}
+
+// Message representing a JDBC parameter
+message ParameterProto {
+    int32 index = 1;
+    ParameterTypeProto type = 2;
+    repeated ParameterValue values = 3;
+}
+
+// Message representing a property entry (key-value pair)
+message PropertyEntry {
+    string key = 1;
+    oneof value {
+        bool bool_value = 2;
+        int32 int_value = 3;
+        int64 long_value = 4;
+        float float_value = 5;
+        double double_value = 6;
+        string string_value = 7;
+        bytes bytes_value = 8;
+    }
+}
+
+// Message representing a row in a result set
+message ResultRow {
+    repeated ParameterValue columns = 1;
+}
+
+// Message representing query result data
+message OpQueryResultProto {
+    string resultSetUUID = 1;
+    repeated string labels = 2;
+    repeated ResultRow rows = 3;
 }
 
 enum DbName {
@@ -58,17 +137,21 @@ enum ResultType {
 message OpResult {
     SessionInfo session = 1;
     ResultType type = 2;
-    bytes value = 3;
-    string uuid = 4;
-    string flag = 5;
+    oneof result {
+        int32 int_value = 3;
+        OpQueryResultProto query_result = 4;
+        string uuid_value = 5;
+    }
+    string uuid = 6;
+    string flag = 7;
 }
 
 message StatementRequest {
     SessionInfo session = 1;
     string sql = 2;
-    bytes parameters = 3;
+    repeated ParameterProto parameters = 3;
     string statementUUID = 4;
-    bytes properties = 5;
+    repeated PropertyEntry properties = 5;
 }
 
 enum SqlErrorType {
@@ -114,7 +197,7 @@ message LobDataBlock {
     int64 position = 2;
     bytes data = 3;
     LobType lobType = 4;
-    bytes metadata = 5; // Used for Binary stream where the prepared statement has to be created before the execution to set the stream directly to it.
+    repeated PropertyEntry metadata = 5; // Used for Binary stream where the prepared statement has to be created before the execution to set the stream directly to it.
 }
 
 message SessionTerminationStatus {
@@ -185,7 +268,7 @@ enum CallType {
 message TargetCall {
     CallType callType = 1;
     string resourceName = 2;
-    bytes params = 3;
+    repeated ParameterValue params = 3;
     TargetCall nextCall = 4;
 }
 
@@ -194,13 +277,13 @@ message CallResourceRequest {
     ResourceType resourceType = 2;
     string resourceUUID = 3;
     TargetCall target = 4;
-    bytes properties = 5;
+    repeated PropertyEntry properties = 5;
 }
 
 message CallResourceResponse {
     SessionInfo session = 1;
     string resourceUUID = 2;
-    bytes values = 3;
+    repeated ParameterValue values = 3;
 }
 
 message ResultSetFetchRequest {
