@@ -3,6 +3,7 @@ package org.openjproxy.grpc.server.statement;
 import com.openjproxy.grpc.StatementRequest;
 import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.SessionManager;
@@ -14,7 +15,6 @@ import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
 import static org.openjproxy.grpc.server.Constants.EMPTY_MAP;
 
 /**
@@ -38,10 +38,10 @@ public class StatementFactory {
             if (StringUtils.isNotEmpty(request.getStatementUUID())) {
                 return sessionManager.getStatement(request.getSession(), request.getStatementUUID());
             }
-            if (request.getProperties().isEmpty()) {
+            if (request.getPropertiesList().isEmpty()) {
                 return connection.createStatement();
             }
-            Map<String, Object> properties = deserialize(request.getProperties().toByteArray(), Map.class);
+            Map<String, Object> properties = ProtoConverter.propertiesFromProto(request.getPropertiesList());
 
             if (properties.isEmpty() ||
                     (properties.size() == 1 && properties.get(CommonConstants.PREPARED_STATEMENT_SQL_KEY) != null)) {
@@ -82,8 +82,8 @@ public class StatementFactory {
 
         PreparedStatement ps = null;
         Map<String, Object> properties = EMPTY_MAP;
-        if (!request.getProperties().isEmpty()) {
-            properties = deserialize(request.getProperties().toByteArray(), Map.class);
+        if (!request.getPropertiesList().isEmpty()) {
+            properties = ProtoConverter.propertiesFromProto(request.getPropertiesList());
         }
         if (properties.isEmpty()) {
             ps = dto.getConnection().prepareStatement(sql);
