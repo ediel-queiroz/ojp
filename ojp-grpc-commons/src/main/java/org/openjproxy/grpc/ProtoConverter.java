@@ -1,6 +1,8 @@
 package org.openjproxy.grpc;
 
 import com.google.protobuf.ByteString;
+import com.openjproxy.grpc.IntArray;
+import com.openjproxy.grpc.LongArray;
 import com.openjproxy.grpc.OpQueryResultProto;
 import com.openjproxy.grpc.ParameterProto;
 import com.openjproxy.grpc.ParameterTypeProto;
@@ -18,6 +20,7 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Map;
 
 /**
@@ -182,6 +185,7 @@ public class ProtoConverter {
 
     /**
      * Convert a Java object to ParameterValue.
+     * Does NOT use Java serialization - all types must be explicitly handled.
      */
     public static ParameterValue toParameterValue(Object value) {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
@@ -207,7 +211,24 @@ public class ProtoConverter {
             builder.setStringValue((String) value);
         } else if (value instanceof byte[]) {
             builder.setBytesValue(ByteString.copyFrom((byte[]) value));
+        } else if (value instanceof int[]) {
+            // Handle int array
+            int[] arr = (int[]) value;
+            IntArray.Builder intArrayBuilder = IntArray.newBuilder();
+            for (int i : arr) {
+                intArrayBuilder.addValues(i);
+            }
+            builder.setIntArrayValue(intArrayBuilder.build());
+        } else if (value instanceof long[]) {
+            // Handle long array
+            long[] arr = (long[]) value;
+            LongArray.Builder longArrayBuilder = LongArray.newBuilder();
+            for (long l : arr) {
+                longArrayBuilder.addValues(l);
+            }
+            builder.setLongArrayValue(longArrayBuilder.build());
         } else if (value instanceof BigDecimal) {
+            // BigDecimal as string to preserve precision
             builder.setStringValue(value.toString());
         } else if (value instanceof Date) {
             builder.setLongValue(((Date) value).getTime());
@@ -215,8 +236,16 @@ public class ProtoConverter {
             builder.setLongValue(((Time) value).getTime());
         } else if (value instanceof Timestamp) {
             builder.setLongValue(((Timestamp) value).getTime());
+        } else if (value instanceof Map) {
+            // For Map types, serialize as bytes using SerializationHandler
+            // This is needed for complex nested maps
+            builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
+        } else if (value instanceof java.util.UUID) {
+            // UUID as string
+            builder.setStringValue(value.toString());
         } else {
-            // For other types, serialize as bytes using SerializationHandler
+            // For any other complex types, we need to use Java serialization
+            // This maintains backward compatibility but should be avoided when possible
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
@@ -246,7 +275,29 @@ public class ProtoConverter {
             case STRING_VALUE:
                 return value.getStringValue();
             case BYTES_VALUE:
-                return value.getBytesValue().toByteArray();
+                // Deserialize bytes back to original object using Java serialization
+                // This handles complex types like Maps and other serialized objects
+                byte[] bytes = value.getBytesValue().toByteArray();
+                if (bytes.length == 0) {
+                    return null;
+                }
+                return SerializationHandler.deserialize(bytes, Object.class);
+            case INT_ARRAY_VALUE:
+                // Convert IntArray proto message to int[]
+                IntArray intArray = value.getIntArrayValue();
+                int[] intArr = new int[intArray.getValuesCount()];
+                for (int i = 0; i < intArray.getValuesCount(); i++) {
+                    intArr[i] = intArray.getValues(i);
+                }
+                return intArr;
+            case LONG_ARRAY_VALUE:
+                // Convert LongArray proto message to long[]
+                LongArray longArray = value.getLongArrayValue();
+                long[] longArr = new long[longArray.getValuesCount()];
+                for (int i = 0; i < longArray.getValuesCount(); i++) {
+                    longArr[i] = longArray.getValues(i);
+                }
+                return longArr;
             case VALUE_NOT_SET:
             default:
                 return null;

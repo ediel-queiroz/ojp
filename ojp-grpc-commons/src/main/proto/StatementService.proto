@@ -54,7 +54,19 @@ message ParameterValue {
         double double_value = 5;
         string string_value = 6;
         bytes bytes_value = 7;
+        IntArray int_array_value = 8;
+        LongArray long_array_value = 9;
     }
+}
+
+// Message for int array
+message IntArray {
+    repeated int32 values = 1;
+}
+
+// Message for long array
+message LongArray {
+    repeated int64 values = 1;
 }
 
 // Message representing a JDBC parameter
