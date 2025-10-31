@@ -338,10 +338,18 @@ public class ProtoConverter {
             case CLOB:
             case N_CLOB:
             case SQL_XML:
+            case BIG_DECIMAL:
+            case DATE:
+            case TIME:
+            case TIMESTAMP:
+            case URL:
+            case ROW_ID:
                 // These are complex objects that were serialized
                 return true;
             default:
-                // For other types, assume no deserialization needed
+                // For primitive types (BOOLEAN, INTEGER, LONG, FLOAT, DOUBLE, STRING)
+                // that are handled by explicit proto fields, we shouldn't reach here
+                // But if we do, don't deserialize
                 return false;
         }
     }
