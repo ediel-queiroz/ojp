@@ -270,22 +270,15 @@ public class ProtoConverter {
                     return null;
                 }
                 
-                // Only deserialize if this is an OBJECT type or other complex type that was serialized
-                // For BYTES, BINARY_STREAM, BLOB, etc., return raw bytes
-                if (type != null && shouldDeserializeBytes(type)) {
-                    return SerializationHandler.deserialize(bytes, Object.class);
-                } else if (type == null) {
-                    // No type information (e.g., CallResourceResponse)
-                    // Try to deserialize, but fall back to raw bytes if it fails
-                    try {
-                        return SerializationHandler.deserialize(bytes, Object.class);
-                    } catch (Exception e) {
-                        // Not a serialized object, return raw bytes
-                        return bytes;
-                    }
-                } else {
-                    // Return raw bytes for binary data types
+                // Determine if bytes should be deserialized based on ParameterType
+                if (type != null && !shouldDeserializeBytes(type)) {
+                    // Binary data types (BYTES, BLOB, BINARY_STREAM) - return raw bytes
                     return bytes;
+                } else {
+                    // Complex types (OBJECT, ARRAY, etc.) or unknown type - deserialize
+                    // For result set data (type==null), always deserialize since we serialize
+                    // complex types (BigDecimal, Date, etc.) as bytes
+                    return SerializationHandler.deserialize(bytes, Object.class);
                 }
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
