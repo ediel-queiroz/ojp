@@ -187,7 +187,7 @@ public class ProtoConverter {
 
     /**
      * Convert a Java object to ParameterValue.
-     * Does NOT use Java serialization - all types must be explicitly handled.
+     * Uses Java serialization for complex types to preserve exact type information.
      */
     public static ParameterValue toParameterValue(Object value) {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
@@ -229,25 +229,10 @@ public class ProtoConverter {
                 longArrayBuilder.addValues(l);
             }
             builder.setLongArrayValue(longArrayBuilder.build());
-        } else if (value instanceof BigDecimal) {
-            // BigDecimal as string to preserve precision
-            builder.setStringValue(value.toString());
-        } else if (value instanceof Date) {
-            builder.setLongValue(((Date) value).getTime());
-        } else if (value instanceof Time) {
-            builder.setLongValue(((Time) value).getTime());
-        } else if (value instanceof Timestamp) {
-            builder.setLongValue(((Timestamp) value).getTime());
-        } else if (value instanceof Map) {
-            // For Map types, serialize as bytes using SerializationHandler
-            // This is needed for complex nested maps
-            builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
-        } else if (value instanceof java.util.UUID) {
-            // UUID as string
-            builder.setStringValue(value.toString());
         } else {
-            // For any other complex types, we need to use Java serialization
-            // This maintains backward compatibility but should be avoided when possible
+            // For all other complex types (BigDecimal, Date, Time, Timestamp, UUID, Map, etc.),
+            // use Java serialization to preserve exact type information.
+            // This is necessary because converting them to primitives (String, Long) loses type info.
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
