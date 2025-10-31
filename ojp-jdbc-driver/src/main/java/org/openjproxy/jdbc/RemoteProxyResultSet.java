@@ -1284,6 +1284,17 @@ public class RemoteProxyResultSet implements java.sql.ResultSet {
         }
         
         Object result = ProtoConverter.fromParameterValue(values.get(0));
+        
+        // Handle numeric type conversions (Byte/Short come as Integer from proto)
+        if (result instanceof Integer && !Integer.class.equals(returnType)) {
+            Integer intValue = (Integer) result;
+            if (Short.class.equals(returnType) || short.class.equals(returnType)) {
+                result = intValue.shortValue();
+            } else if (Byte.class.equals(returnType) || byte.class.equals(returnType)) {
+                result = intValue.byteValue();
+            }
+        }
+        
         return (T) result;
     }
 

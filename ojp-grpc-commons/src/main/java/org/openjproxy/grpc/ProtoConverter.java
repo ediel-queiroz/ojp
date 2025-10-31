@@ -197,6 +197,12 @@ public class ProtoConverter {
             return builder.build();
         } else if (value instanceof Boolean) {
             builder.setBoolValue((Boolean) value);
+        } else if (value instanceof Byte) {
+            // Byte is stored as int32 for efficiency, will be cast back on server
+            builder.setIntValue(((Byte) value).intValue());
+        } else if (value instanceof Short) {
+            // Short is stored as int32 for efficiency, will be cast back on server
+            builder.setIntValue(((Short) value).intValue());
         } else if (value instanceof Integer) {
             builder.setIntValue((Integer) value);
         } else if (value instanceof Long) {
@@ -226,11 +232,8 @@ public class ProtoConverter {
             }
             builder.setLongArrayValue(longArrayBuilder.build());
         } else {
-            // For all other types (Byte, Short, BigDecimal, Date, Time, Timestamp, UUID, Map, etc.),
+            // For all other complex types (BigDecimal, Date, Time, Timestamp, UUID, Map, etc.),
             // use Java serialization to preserve exact type information.
-            // This is necessary because:
-            // - Byte/Short would lose type info if converted to int_value (always become Integer)
-            // - Complex types like BigDecimal, Date need exact type preservation
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
