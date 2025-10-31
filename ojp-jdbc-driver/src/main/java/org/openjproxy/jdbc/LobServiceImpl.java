@@ -7,6 +7,7 @@ import com.openjproxy.grpc.LobType;
 import lombok.AllArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.io.BufferedInputStream;
@@ -18,7 +19,6 @@ import java.util.Iterator;
 import java.util.Map;
 
 import static org.openjproxy.constants.CommonConstants.PREPARED_STATEMENT_BINARY_STREAM_LENGTH;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 @Slf4j
 @AllArgsConstructor
@@ -40,7 +40,12 @@ public class LobServiceImpl implements LobService {
         BufferedInputStream bis = new BufferedInputStream(is);
         long length = metadata.get(PREPARED_STATEMENT_BINARY_STREAM_LENGTH) != null ?
                 (Long) metadata.get(PREPARED_STATEMENT_BINARY_STREAM_LENGTH) : -1l;
-        byte[] metadataBytes = (metadata == null) ? new byte[]{} : serialize(metadata);
+        
+        // Convert metadata Map<Integer, Object> to Map<String, Object> for ProtoConverter
+        Map<String, Object> metadataStringKey = new HashMap<>();
+        for (Map.Entry<Integer, Object> entry : metadata.entrySet()) {
+            metadataStringKey.put(entry.getKey().toString(), entry.getValue());
+        }
 
         // Hydrated approach: Read all bytes at once instead of streaming
         // This provides consistent behavior across all databases and eliminates streaming complexity
@@ -60,8 +65,6 @@ public class LobServiceImpl implements LobService {
             throw new SQLException("Failed to read LOB data: " + e.getMessage(), e);
         }
 
-        final byte[] finalMetadataBytes = metadataBytes;
-
         // Create a simple iterator that returns all data in a single block
         Iterator<LobDataBlock> itLobDataBlocks = new Iterator<LobDataBlock>() {
             private boolean sent = false;
@@ -79,7 +82,7 @@ public class LobServiceImpl implements LobService {
                         .setSession(connection.getSession())
                         .setPosition(pos)
                         .setData(ByteString.copyFrom(allBytes))
-                        .setMetadata(ByteString.copyFrom(finalMetadataBytes))
+                        .addAllMetadata(ProtoConverter.propertiesToProto(metadataStringKey))
                         .build();
             }
         };

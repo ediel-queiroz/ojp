@@ -8,6 +8,7 @@ import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.LobType;
 import com.openjproxy.grpc.OpResult;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.ResultType;
 import com.openjproxy.grpc.TargetCall;
@@ -15,6 +16,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.dto.Parameter;
 
@@ -46,9 +48,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.List;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 import static org.openjproxy.grpc.dto.ParameterType.ARRAY;
 import static org.openjproxy.grpc.dto.ParameterType.ASCII_STREAM;
 import static org.openjproxy.grpc.dto.ParameterType.BIG_DECIMAL;
@@ -129,7 +130,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         if (StringUtils.isNotBlank(result.getUuid())) {
             this.setStatementUUID(result.getUuid());
         }
-        return deserialize(result.getValue().toByteArray(), Integer.class);
+        return result.getIntValue();
     }
 
     @Override
@@ -143,8 +144,8 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                 new ArrayList<>(this.paramsMap.values()), this.getStatementUUID(), properties);
         this.connection.setSession(result.getSession());
         if (StringUtils.isBlank(this.getStatementUUID()) && ResultType.UUID_STRING.equals(result.getType()) &&
-                !result.getValue().isEmpty()) {
-            String psUUID = deserialize(result.getValue().toByteArray(), String.class);
+                !result.getUuidValue().isEmpty()) {
+            String psUUID = result.getUuidValue();
             this.setStatementUUID(psUUID);
         }
         this.paramsMap = new TreeMap<>();
@@ -899,7 +900,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
             builder.setResourceUUID(this.getStatementUUID());
         }
         if (this.properties != null) {
-            builder.setProperties(ByteString.copyFrom(serialize(this.properties)));
+            builder.addAllProperties(ProtoConverter.propertiesToProto(this.properties));
         }
         return builder;
     }
@@ -916,7 +917,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                 TargetCall.newBuilder()
                         .setCallType(callType)
                         .setResourceName(targetName)
-                        .setParams(ByteString.copyFrom(serialize(params)))
+                        .addAllParams(ProtoConverter.objectListToParameterValues(params))
                         .build()
         );
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
@@ -927,6 +928,14 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         if (Void.class.equals(returnType)) {
             return null;
         }
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        
+        // Convert ParameterValue list back to the expected type
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }

@@ -4,11 +4,13 @@ import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.TargetCall;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.Connection;
@@ -17,9 +19,6 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 @Slf4j
 public class DatabaseMetaData implements java.sql.DatabaseMetaData {
@@ -1198,13 +1197,19 @@ public class DatabaseMetaData implements java.sql.DatabaseMetaData {
                         .setNextCall(TargetCall.newBuilder()
                                 .setCallType(callType)
                                 .setResourceName(attrName)
-                                .setParams(ByteString.copyFrom(serialize(params)))
+                                .addAllParams(ProtoConverter.objectListToParameterValues(params))
                                 .build())
                         .build()
         );
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
         this.connection.setSession(response.getSession());
 
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }

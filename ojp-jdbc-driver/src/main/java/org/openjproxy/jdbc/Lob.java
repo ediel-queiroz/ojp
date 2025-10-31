@@ -8,12 +8,14 @@ import com.openjproxy.grpc.CallType;
 import com.openjproxy.grpc.LobDataBlock;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.LobType;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
 import io.grpc.StatusRuntimeException;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.io.IOException;
@@ -28,8 +30,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 
 @Slf4j
@@ -194,7 +194,7 @@ public class Lob {
                 TargetCall.newBuilder()
                         .setCallType(callType)
                         .setResourceName(target)
-                        .setParams(ByteString.copyFrom(serialize(params)))
+                        .addAllParams(ProtoConverter.objectListToParameterValues(params))
                         .build()
         );
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
@@ -202,6 +202,13 @@ public class Lob {
         if (Void.class.equals(returnType)) {
             return null;
         }
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }

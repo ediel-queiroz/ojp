@@ -3,15 +3,16 @@ package org.openjproxy.jdbc;
 import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.SQLException;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
+import java.util.List;
 
 @Slf4j
 public class Savepoint implements java.sql.Savepoint {
@@ -55,6 +56,12 @@ public class Savepoint implements java.sql.Savepoint {
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
         this.connection.setSession(response.getSession());
 
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }
