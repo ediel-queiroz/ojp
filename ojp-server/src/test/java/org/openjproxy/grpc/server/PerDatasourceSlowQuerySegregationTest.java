@@ -7,10 +7,12 @@ import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.SerializationHandler;
 import org.openjproxy.grpc.server.utils.ConnectionHashGenerator;
 
 import java.lang.reflect.Field;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
@@ -40,13 +42,21 @@ public class PerDatasourceSlowQuerySegregationTest {
         Properties clientProperties1 = new Properties();
         clientProperties1.setProperty("ojp.connection.pool.maximumPoolSize", "10");
         clientProperties1.setProperty("ojp.connection.pool.minimumIdle", "2");
-        byte[] serializedProperties1 = SerializationHandler.serialize(clientProperties1);
+        
+        Map<String, Object> propertiesMap1 = new HashMap<>();
+        for (String key : clientProperties1.stringPropertyNames()) {
+            propertiesMap1.put(key, clientProperties1.getProperty(key));
+        }
 
         // Create properties for second connection
         Properties clientProperties2 = new Properties();
         clientProperties2.setProperty("ojp.connection.pool.maximumPoolSize", "20");
         clientProperties2.setProperty("ojp.connection.pool.minimumIdle", "5");
-        byte[] serializedProperties2 = SerializationHandler.serialize(clientProperties2);
+        
+        Map<String, Object> propertiesMap2 = new HashMap<>();
+        for (String key : clientProperties2.stringPropertyNames()) {
+            propertiesMap2.put(key, clientProperties2.getProperty(key));
+        }
 
         // Create two different connection details with different pool sizes
         ConnectionDetails connectionDetails1 = ConnectionDetails.newBuilder()
@@ -54,7 +64,7 @@ public class PerDatasourceSlowQuerySegregationTest {
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-1")
-                .setProperties(ByteString.copyFrom(serializedProperties1))
+                .addAllProperties(ProtoConverter.propertiesToProto(propertiesMap1))
                 .build();
 
         ConnectionDetails connectionDetails2 = ConnectionDetails.newBuilder()
@@ -62,7 +72,7 @@ public class PerDatasourceSlowQuerySegregationTest {
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-2")
-                .setProperties(ByteString.copyFrom(serializedProperties2))
+                .addAllProperties(ProtoConverter.propertiesToProto(propertiesMap2))
                 .build();
 
         StreamObserver<SessionInfo> responseObserver1 = Mockito.mock(StreamObserver.class);
@@ -127,7 +137,11 @@ public class PerDatasourceSlowQuerySegregationTest {
         // Create properties
         Properties clientProperties = new Properties();
         clientProperties.setProperty("ojp.connection.pool.maximumPoolSize", "15");
-        byte[] serializedProperties = SerializationHandler.serialize(clientProperties);
+        
+        Map<String, Object> propertiesMap = new HashMap<>();
+        for (String key : clientProperties.stringPropertyNames()) {
+            propertiesMap.put(key, clientProperties.getProperty(key));
+        }
 
         // Create connection
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
@@ -135,7 +149,7 @@ public class PerDatasourceSlowQuerySegregationTest {
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-1")
-                .setProperties(ByteString.copyFrom(serializedProperties))
+                .addAllProperties(ProtoConverter.propertiesToProto(propertiesMap))
                 .build();
 
         StreamObserver<SessionInfo> responseObserver = Mockito.mock(StreamObserver.class);
