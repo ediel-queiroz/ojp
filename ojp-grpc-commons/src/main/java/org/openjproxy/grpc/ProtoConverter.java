@@ -274,11 +274,19 @@ public class ProtoConverter {
                 if (type != null && !shouldDeserializeBytes(type)) {
                     // Binary data types (BYTES, BLOB, BINARY_STREAM) - return raw bytes
                     return bytes;
-                } else {
-                    // Complex types (OBJECT, ARRAY, etc.) or unknown type - deserialize
-                    // For result set data (type==null), always deserialize since we serialize
-                    // complex types (BigDecimal, Date, etc.) as bytes
+                } else if (type != null) {
+                    // Complex types (OBJECT, ARRAY, etc.) with known type - deserialize
                     return SerializationHandler.deserialize(bytes, Object.class);
+                } else {
+                    // Unknown type (result set data) - try to deserialize, but return raw bytes if it fails
+                    // This handles both serialized complex types (BigDecimal, Date) and raw binary data (BLOBs)
+                    try {
+                        return SerializationHandler.deserialize(bytes, Object.class);
+                    } catch (RuntimeException e) {
+                        // If deserialization fails (e.g., StreamCorruptedException for BLOB data),
+                        // return raw bytes
+                        return bytes;
+                    }
                 }
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
