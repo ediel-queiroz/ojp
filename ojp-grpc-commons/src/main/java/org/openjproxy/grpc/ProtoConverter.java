@@ -57,14 +57,16 @@ public class ProtoConverter {
             return null;
         }
 
+        ParameterType type = fromProto(proto.getType());
         List<Object> values = new ArrayList<>();
         for (ParameterValue pv : proto.getValuesList()) {
-            values.add(fromParameterValue(pv));
+            Object value = fromParameterValue(pv, type);
+            values.add(value);
         }
 
         return Parameter.builder()
                 .index(proto.getIndex())
-                .type(fromProto(proto.getType()))
+                .type(type)
                 .values(values)
                 .build();
     }
@@ -255,8 +257,11 @@ public class ProtoConverter {
     /**
      * Convert ParameterValue to Java object.
      * Note: This returns a generic Object, caller needs to handle type casting.
+     * 
+     * @param value The ParameterValue to convert
+     * @param type The ParameterType to help determine how to handle bytes
      */
-    public static Object fromParameterValue(ParameterValue value) {
+    public static Object fromParameterValue(ParameterValue value, ParameterType type) {
         if (value == null) {
             return null;
         }
@@ -275,13 +280,28 @@ public class ProtoConverter {
             case STRING_VALUE:
                 return value.getStringValue();
             case BYTES_VALUE:
-                // Deserialize bytes back to original object using Java serialization
-                // This handles complex types like Maps and other serialized objects
                 byte[] bytes = value.getBytesValue().toByteArray();
                 if (bytes.length == 0) {
                     return null;
                 }
-                return SerializationHandler.deserialize(bytes, Object.class);
+                
+                // Only deserialize if this is an OBJECT type or other complex type that was serialized
+                // For BYTES, BINARY_STREAM, BLOB, etc., return raw bytes
+                if (type != null && shouldDeserializeBytes(type)) {
+                    return SerializationHandler.deserialize(bytes, Object.class);
+                } else if (type == null) {
+                    // No type information (e.g., CallResourceResponse)
+                    // Try to deserialize, but fall back to raw bytes if it fails
+                    try {
+                        return SerializationHandler.deserialize(bytes, Object.class);
+                    } catch (Exception e) {
+                        // Not a serialized object, return raw bytes
+                        return bytes;
+                    }
+                } else {
+                    // Return raw bytes for binary data types
+                    return bytes;
+                }
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
                 IntArray intArray = value.getIntArrayValue();
@@ -302,6 +322,53 @@ public class ProtoConverter {
             default:
                 return null;
         }
+    }
+    
+    /**
+     * Determine if bytes should be deserialized based on ParameterType.
+     * Only deserialize for OBJECT and complex types that were serialized.
+     * For binary data types (BYTES, BLOB, BINARY_STREAM), return raw bytes.
+     */
+    private static boolean shouldDeserializeBytes(ParameterType type) {
+        // If no type information, try to deserialize (for CallResourceResponse compatibility)
+        // This may fail for raw binary data, but caller should handle that
+        if (type == null) {
+            return true;
+        }
+        
+        switch (type) {
+            case BYTES:
+            case BINARY_STREAM:
+            case BLOB:
+            case ASCII_STREAM:
+            case UNICODE_STREAM:
+            case CHARACTER_READER:
+            case N_CHARACTER_STREAM:
+                // These are raw binary/text data - don't deserialize
+                return false;
+            case OBJECT:
+            case ARRAY:
+            case REF:
+            case CLOB:
+            case N_CLOB:
+            case SQL_XML:
+                // These are complex objects that were serialized
+                return true;
+            default:
+                // For other types, assume no deserialization needed
+                return false;
+        }
+    }
+    
+    /**
+     * Convert ParameterValue to Java object without type information.
+     * This assumes bytes should be deserialized (for backward compatibility with CallResourceResponse).
+     * Use fromParameterValue(ParameterValue, ParameterType) when type information is available.
+     */
+    public static Object fromParameterValue(ParameterValue value) {
+        // For calls without type info, try to deserialize bytes
+        // This is mainly for CallResourceResponse values where we don't have ParameterType
+        return fromParameterValue(value, null);
     }
 
     /**
