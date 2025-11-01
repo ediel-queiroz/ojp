@@ -235,6 +235,11 @@ public class MySQLStatementExtensiveTests {
         this.setUp(driverClass, url, user, password);
         
         // Create table with auto-increment
+        try {
+            statement.execute("DROP TABLE mysql_auto_test");
+        } catch (SQLException e) {
+            // Ignore if table doesn't exist
+        }
         statement.execute("CREATE TABLE mysql_auto_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))");
         
         statement.execute("INSERT INTO mysql_auto_test (name) VALUES ('Test')", Statement.RETURN_GENERATED_KEYS);
@@ -253,6 +258,11 @@ public class MySQLStatementExtensiveTests {
         this.setUp(driverClass, url, user, password);
         
         // Create table with auto-increment
+        try{
+            statement.execute("DROP TABLE mysql_auto_test2");
+        } catch (SQLException e) {
+            // Ignore if table doesn't exist
+        }
         statement.execute("CREATE TABLE mysql_auto_test2 (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))");
         
         int rows = statement.executeUpdate("INSERT INTO mysql_auto_test2 (name) VALUES ('Test')", Statement.RETURN_GENERATED_KEYS);
