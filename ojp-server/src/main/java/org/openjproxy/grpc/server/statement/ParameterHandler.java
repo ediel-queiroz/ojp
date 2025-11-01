@@ -58,6 +58,10 @@ public class ParameterHandler {
             case INT:
                 ps.setInt(idx, (int) param.getValues().get(0));
                 break;
+            case SHORT:
+                // Short comes as Integer from proto, needs to be cast
+                ps.setShort(idx, ((Integer) param.getValues().get(0)).shortValue());
+                break;
             case DOUBLE:
                 ps.setDouble(idx, (double) param.getValues().get(0));
                 break;
@@ -80,7 +84,17 @@ public class ParameterHandler {
                 ps.setBytes(idx, (byte[]) param.getValues().get(0));
                 break;
             case BYTE:
-                ps.setByte(idx, ((byte[]) param.getValues().get(0))[0]);//Comes as an array of bytes with one element.
+                if (param.getValues().get(0) instanceof byte[]) {
+                    byte[] byteArray = (byte[]) param.getValues().get(0);
+                    if (byteArray.length > 0) {
+                        ps.setByte(idx, byteArray[0]);
+                    } else {
+                        ps.setByte(idx, (byte) 0);
+                    }
+                } else {
+                    // Byte comes as Integer from proto, needs to be cast
+                    ps.setByte(idx, ((Integer) param.getValues().get(0)).byteValue());
+                }
                 break;
             case DATE:
                 ps.setDate(idx, (Date) param.getValues().get(0));

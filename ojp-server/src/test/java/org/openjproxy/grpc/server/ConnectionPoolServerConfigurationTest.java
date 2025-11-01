@@ -5,9 +5,12 @@ import com.openjproxy.grpc.ConnectionDetails;
 import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.SerializationHandler;
 
 import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -32,8 +35,11 @@ public class ConnectionPoolServerConfigurationTest {
         clientProperties.setProperty("ojp.connection.pool.maximumPoolSize", "25");
         clientProperties.setProperty("ojp.connection.pool.minimumIdle", "7");
 
-        // Serialize properties as the client would
-        byte[] serializedProperties = SerializationHandler.serialize(clientProperties);
+        // Convert properties to PropertyEntry list using ProtoConverter
+        Map<String, Object> propertiesMap = new HashMap<>();
+        for (String key : clientProperties.stringPropertyNames()) {
+            propertiesMap.put(key, clientProperties.getProperty(key));
+        }
         
         // Create ConnectionDetails with properties
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
@@ -41,7 +47,7 @@ public class ConnectionPoolServerConfigurationTest {
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("test-client")
-                .setProperties(ByteString.copyFrom(serializedProperties))
+                .addAllProperties(ProtoConverter.propertiesToProto(propertiesMap))
                 .build();
         
         // Create HikariConfig to test configuration
@@ -108,8 +114,11 @@ public class ConnectionPoolServerConfigurationTest {
         clientProperties.setProperty("ojp.connection.pool.maximumPoolSize", "invalid_number");
         clientProperties.setProperty("ojp.connection.pool.minimumIdle", "not_a_number");
 
-        // Serialize properties as the client would
-        byte[] serializedProperties = SerializationHandler.serialize(clientProperties);
+        // Convert properties to PropertyEntry list using ProtoConverter
+        Map<String, Object> propertiesMap = new HashMap<>();
+        for (String key : clientProperties.stringPropertyNames()) {
+            propertiesMap.put(key, clientProperties.getProperty(key));
+        }
         
         // Create ConnectionDetails with properties
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
@@ -117,7 +126,7 @@ public class ConnectionPoolServerConfigurationTest {
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("test-client")
-                .setProperties(ByteString.copyFrom(serializedProperties))
+                .addAllProperties(ProtoConverter.propertiesToProto(propertiesMap))
                 .build();
         
         // Create HikariConfig to test configuration

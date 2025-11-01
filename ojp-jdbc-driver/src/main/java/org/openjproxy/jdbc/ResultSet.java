@@ -9,6 +9,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.dto.OpQueryResult;
 import org.openjproxy.jdbc.sqlserver.HydratedBlob;
@@ -39,7 +40,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 
 @Slf4j
@@ -67,7 +67,7 @@ public class ResultSet extends RemoteProxyResultSet {
         try {
             this.statement = statement;
             OpResult result = nextWithSessionUpdate(itOpResult.next());
-            OpQueryResult opQueryResult = deserialize(result.getValue().toByteArray(), OpQueryResult.class);
+            OpQueryResult opQueryResult = ProtoConverter.fromProto(result.getQueryResult());
             this.inRowByRowMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE.equalsIgnoreCase(result.getFlag());
             this.setStatementService(statementService);
             this.setResultSetUUID(opQueryResult.getResultSetUUID());
@@ -114,7 +114,7 @@ public class ResultSet extends RemoteProxyResultSet {
     }
 
     private void setNextOpResult(OpResult result) {
-        OpQueryResult opQueryResult = deserialize(result.getValue().toByteArray(), OpQueryResult.class);
+        OpQueryResult opQueryResult = ProtoConverter.fromProto(result.getQueryResult());
         this.currentDataBlock = opQueryResult.getRows();
         this.blockCount.incrementAndGet();
         this.blockIdx.set(0);
@@ -195,6 +195,8 @@ public class ResultSet extends RemoteProxyResultSet {
             return ((byte[]) lastValueRead)[0];
         } else if (lastValueRead instanceof Short) {
             return (byte)(short) lastValueRead;
+        } else if (lastValueRead instanceof Integer) {
+            return (byte)(int) lastValueRead;
         }
         return (byte) lastValueRead;
     }
@@ -208,6 +210,8 @@ public class ResultSet extends RemoteProxyResultSet {
         lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
         if (lastValueRead == null) {
             return 0;
+        } else if (lastValueRead instanceof Integer) {
+            return (short)(int) lastValueRead;
         }
         return (short) lastValueRead;
     }

@@ -4,7 +4,7 @@ import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
-import org.openjproxy.grpc.SerializationHandler;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.jdbc.ClientUUID;
 
@@ -15,7 +15,9 @@ import javax.transaction.xa.XAResource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 /**
@@ -60,21 +62,22 @@ public class OjpXAConnection implements XAConnection {
         
         try {
             // Connect to server with XA flag enabled
-            ByteString propertiesBytes = ByteString.EMPTY;
-            if (properties != null && !properties.isEmpty()) {
-                propertiesBytes = ByteString.copyFrom(SerializationHandler.serialize(properties));
-            }
-
-            ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
+            ConnectionDetails.Builder connBuilder = ConnectionDetails.newBuilder()
                     .setUrl(url)
                     .setUser(user != null ? user : "")
                     .setPassword(password != null ? password : "")
                     .setClientUUID(ClientUUID.getUUID())
-                    .setProperties(propertiesBytes)
-                    .setIsXA(true)  // Mark this as an XA connection
-                    .build();
+                    .setIsXA(true);  // Mark this as an XA connection
+            
+            if (properties != null && !properties.isEmpty()) {
+                Map<String, Object> propertiesMap = new HashMap<>();
+                for (String key : properties.stringPropertyNames()) {
+                    propertiesMap.put(key, properties.getProperty(key));
+                }
+                connBuilder.addAllProperties(ProtoConverter.propertiesToProto(propertiesMap));
+            }
 
-            this.sessionInfo = statementService.connect(connectionDetails);
+            this.sessionInfo = statementService.connect(connBuilder.build());
             log.debug("XA connection established with session: {}", sessionInfo.getSessionUUID());
             return sessionInfo;
 

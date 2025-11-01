@@ -4,18 +4,17 @@ import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 @Slf4j
 public class ResultSetMetaData implements java.sql.ResultSetMetaData {
@@ -57,8 +56,12 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
         } else if (this.ps != null) {
             CallResourceRequest.Builder builder = CallResourceRequest.newBuilder()
                     .setSession(this.ps.getConnection().getSession())
-                    .setResourceType(ResourceType.RES_PREPARED_STATEMENT)
-                    .setProperties(ByteString.copyFrom(serialize(this.ps.getProperties())));
+                    .setResourceType(ResourceType.RES_PREPARED_STATEMENT);
+            
+            if (this.ps.getProperties() != null) {
+                builder.addAllProperties(ProtoConverter.propertiesToProto(this.ps.getProperties()));
+            }
+            
             if (StringUtils.isNotBlank(this.ps.getStatementUUID())) {
                 builder.setResourceUUID(this.ps.getStatementUUID());
             }
@@ -213,7 +216,7 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
                         .setNextCall(TargetCall.newBuilder()
                                 .setCallType(callType)
                                 .setResourceName(attrName)
-                                .setParams(ByteString.copyFrom(serialize(params)))
+                                .addAllParams(ProtoConverter.objectListToParameterValues(params))
                                 .build())
                         .build()
         );
@@ -223,6 +226,13 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
         } else if (this.ps != null) {
             this.ps.getConnection().setSession(response.getSession());
         }
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }

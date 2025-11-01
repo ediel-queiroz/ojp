@@ -5,11 +5,13 @@ import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
 import com.openjproxy.grpc.OpResult;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.SQLException;
@@ -20,8 +22,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 import static org.openjproxy.jdbc.Constants.EMPTY_PARAMETERS_LIST;
 
 @Slf4j
@@ -80,7 +80,7 @@ public class Statement implements java.sql.Statement {
         OpResult result = this.statementService.executeUpdate(this.connection.getSession(), sql, EMPTY_PARAMETERS_LIST,
                 this.statementUUID, this.properties);
         this.connection.setSession(result.getSession());//TODO see if can do this in one place instead of updating session everywhere
-        return deserialize(result.getValue().toByteArray(), Integer.class);
+        return result.getIntValue();
     }
 
     @Override
@@ -475,7 +475,7 @@ public class Statement implements java.sql.Statement {
             builder.setResourceUUID(this.statementUUID);
         }
         if (this.properties != null) {
-            builder.setProperties(ByteString.copyFrom(serialize(this.properties)));
+            builder.addAllProperties(ProtoConverter.propertiesToProto(this.properties));
         }
         return builder;
     }
@@ -492,7 +492,7 @@ public class Statement implements java.sql.Statement {
                 TargetCall.newBuilder()
                         .setCallType(callType)
                         .setResourceName(targetName)
-                        .setParams(ByteString.copyFrom(serialize(params)))
+                        .addAllParams(ProtoConverter.objectListToParameterValues(params))
                         .build()
         );
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
@@ -503,6 +503,14 @@ public class Statement implements java.sql.Statement {
         if (Void.class.equals(returnType)) {
             return null;
         }
-        return (T) deserialize(response.getValues().toByteArray(), returnType);
+        
+        // Convert ParameterValue list back to the expected type
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        
+        Object result = ProtoConverter.fromParameterValue(values.get(0));
+        return (T) result;
     }
 }

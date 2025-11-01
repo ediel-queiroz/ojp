@@ -34,7 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.openjproxy.grpc.SerializationHandler.serialize;
+import static org.openjproxy.grpc.ProtoConverter.propertiesToProto;
+import static org.openjproxy.grpc.ProtoConverter.toProtoList;
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 
 /**
@@ -99,16 +100,20 @@ public class StatementServiceGrpcClient implements StatementService {
                                   Map<String, Object> properties)
             throws SQLException {
         try {
-            StatementRequest.Builder builder = StatementRequest.newBuilder();
-            if (properties != null) {
-                builder.setProperties(ByteString.copyFrom(serialize(properties)));
-            }
-            return this.statemetServiceBlockingStub.executeUpdate(builder
+            StatementRequest.Builder builder = StatementRequest.newBuilder()
                     .setSession(sessionInfo)
                     .setStatementUUID(statementUUID != null ? statementUUID : "")
-                    .setSql(sql)
-                    .setParameters(ByteString.copyFrom(serialize(params)))
-                    .build());
+                    .setSql(sql);
+            
+            if (params != null) {
+                builder.addAllParameters(toProtoList(params));
+            }
+            
+            if (properties != null) {
+                builder.addAllProperties(propertiesToProto(properties));
+            }
+            
+            return this.statemetServiceBlockingStub.executeUpdate(builder.build());
         } catch (StatusRuntimeException e) {
             throw handle(e);
         }
@@ -124,13 +129,20 @@ public class StatementServiceGrpcClient implements StatementService {
     public Iterator<OpResult> executeQuery(SessionInfo sessionInfo, String sql, List<Parameter> params, String statementUUID,
                                            Map<String, Object> properties) throws SQLException {
         try {
-            StatementRequest.Builder builder = StatementRequest.newBuilder();
-            if (properties != null) {
-                builder.setProperties(ByteString.copyFrom(serialize(properties)));
-            }
-            return this.statemetServiceBlockingStub.executeQuery(builder
+            StatementRequest.Builder builder = StatementRequest.newBuilder()
                     .setStatementUUID(statementUUID != null ? statementUUID : "")
-                    .setSession(sessionInfo).setSql(sql).setParameters(ByteString.copyFrom(serialize(params))).build());
+                    .setSession(sessionInfo)
+                    .setSql(sql);
+            
+            if (params != null) {
+                builder.addAllParameters(toProtoList(params));
+            }
+            
+            if (properties != null) {
+                builder.addAllProperties(propertiesToProto(properties));
+            }
+            
+            return this.statemetServiceBlockingStub.executeQuery(builder.build());
         } catch (StatusRuntimeException e) {
             throw handle(e);
         }

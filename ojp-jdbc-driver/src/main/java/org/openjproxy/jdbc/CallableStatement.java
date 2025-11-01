@@ -4,11 +4,13 @@ import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
 import io.grpc.StatusRuntimeException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.GrpcExceptionHandler;
 import org.openjproxy.grpc.client.StatementService;
 
@@ -36,9 +38,6 @@ import java.sql.Timestamp;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Map;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 @Slf4j
 @AllArgsConstructor
@@ -1340,7 +1339,7 @@ public class CallableStatement implements java.sql.CallableStatement {
                 TargetCall.newBuilder()
                         .setCallType(callType)
                         .setResourceName(targetName)
-                        .setParams(ByteString.copyFrom(serialize(params)))
+                        .addAllParams(ProtoConverter.objectListToParameterValues(params))
                         .build()
         );
         try {
@@ -1349,7 +1348,14 @@ public class CallableStatement implements java.sql.CallableStatement {
             if (Void.class.equals(returnType)) {
                 return null;
             }
-            return (T) deserialize(response.getValues().toByteArray(), returnType);
+            
+            List<ParameterValue> values = response.getValuesList();
+            if (values.isEmpty()) {
+                return null;
+            }
+            
+            Object result = ProtoConverter.fromParameterValue(values.get(0));
+            return (T) result;
         } catch (StatusRuntimeException sre) {
             throw GrpcExceptionHandler.handle(sre);
         }

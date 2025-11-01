@@ -1,13 +1,13 @@
 package org.openjproxy.grpc.server.utils;
 
 import com.openjproxy.grpc.ConnectionDetails;
+import org.openjproxy.grpc.ProtoConverter;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
-import java.util.Properties;
+import java.util.Map;
 
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
 import static org.openjproxy.grpc.server.Constants.SHA_256;
 
 /**
@@ -47,13 +47,14 @@ public class ConnectionHashGenerator {
      * Returns "default" if no dataSource name is specified.
      */
     private static String extractDataSourceName(ConnectionDetails connectionDetails) {
-        if (connectionDetails.getProperties().isEmpty()) {
+        if (connectionDetails.getPropertiesList().isEmpty()) {
             return "default";
         }
         
         try {
-            Properties properties = deserialize(connectionDetails.getProperties().toByteArray(), Properties.class);
-            return properties.getProperty("ojp.datasource.name", "default");
+            Map<String, Object> properties = ProtoConverter.propertiesFromProto(connectionDetails.getPropertiesList());
+            Object dataSourceName = properties.get("ojp.datasource.name");
+            return dataSourceName != null ? dataSourceName.toString() : "default";
         } catch (Exception e) {
             // If we can't deserialize properties, fall back to default
             return "default";

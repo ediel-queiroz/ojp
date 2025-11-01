@@ -5,6 +5,7 @@ import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
 import com.openjproxy.grpc.DbName;
+import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.TargetCall;
@@ -15,6 +16,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.SQLClientInfoException;
@@ -29,9 +31,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 @Slf4j
 public class Connection implements java.sql.Connection {
@@ -484,7 +483,7 @@ public class Connection implements java.sql.Connection {
                 TargetCall.newBuilder()
                         .setCallType(callType)
                         .setResourceName(targetName)
-                        .setParams(ByteString.copyFrom(serialize(params)))
+                        .addAllParams(ProtoConverter.objectListToParameterValues(params))
                         .build()
         );
         try {
@@ -494,7 +493,14 @@ public class Connection implements java.sql.Connection {
             if (Void.class.equals(returnType)) {
                 return null;
             }
-            return (T) deserialize(response.getValues().toByteArray(), returnType);
+            
+            List<ParameterValue> values = response.getValuesList();
+            if (values.isEmpty()) {
+                return null;
+            }
+            
+            Object result = ProtoConverter.fromParameterValue(values.get(0));
+            return (T) result;
         } catch (Exception e) {
             e.printStackTrace();
             return null;

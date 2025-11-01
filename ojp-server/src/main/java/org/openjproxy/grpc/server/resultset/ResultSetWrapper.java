@@ -4,11 +4,10 @@ import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.OpResult;
 import com.openjproxy.grpc.ResultType;
 import com.openjproxy.grpc.SessionInfo;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.OpQueryResult;
 
 import java.util.List;
-
-import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 /**
  * Utility class for wrapping result set data into OpResult objects.
@@ -36,7 +35,7 @@ public class ResultSetWrapper {
         resultsBuilder.setType(ResultType.RESULT_SET_DATA);
         queryResultBuilder.resultSetUUID(resultSetUUID);
         queryResultBuilder.rows(results);
-        resultsBuilder.setValue(ByteString.copyFrom(serialize(queryResultBuilder.build())));
+        resultsBuilder.setQueryResult(ProtoConverter.toProto(queryResultBuilder.build()));
         resultsBuilder.setFlag(resultSetMode);
 
         return resultsBuilder.build();

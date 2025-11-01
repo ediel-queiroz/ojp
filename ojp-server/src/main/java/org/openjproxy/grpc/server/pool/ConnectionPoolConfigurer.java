@@ -4,10 +4,10 @@ import com.openjproxy.grpc.ConnectionDetails;
 import com.zaxxer.hikari.HikariConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.ProtoConverter;
 
+import java.util.Map;
 import java.util.Properties;
-
-import static org.openjproxy.grpc.SerializationHandler.deserialize;
 
 /**
  * Utility class responsible for configuring HikariCP connection pools.
@@ -70,12 +70,14 @@ public class ConnectionPoolConfigurer {
      * @return Properties object or null if not available
      */
     private static Properties extractClientProperties(ConnectionDetails connectionDetails) {
-        if (connectionDetails.getProperties().isEmpty()) {
+        if (connectionDetails.getPropertiesList().isEmpty()) {
             return null;
         }
 
         try {
-            Properties clientProperties = deserialize(connectionDetails.getProperties().toByteArray(), Properties.class);
+            Map<String, Object> propertiesMap = ProtoConverter.propertiesFromProto(connectionDetails.getPropertiesList());
+            Properties clientProperties = new Properties();
+            clientProperties.putAll(propertiesMap);
             log.debug("Received {} properties from client for connection pool configuration", clientProperties.size());
             return clientProperties;
         } catch (Exception e) {
