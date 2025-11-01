@@ -56,6 +56,7 @@ message ParameterValue {
         bytes bytes_value = 7;
         IntArray int_array_value = 8;
         LongArray long_array_value = 9;
+        bool is_null = 10;  // Explicit null marker to distinguish null from empty bytes
     }
 }
 

@@ -193,7 +193,8 @@ public class ProtoConverter {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
 
         if (value == null) {
-            // Return empty ParameterValue for null
+            // Set explicit null marker to distinguish null from empty bytes
+            builder.setIsNull(true);
             return builder.build();
         } else if (value instanceof Boolean) {
             builder.setBoolValue((Boolean) value);
@@ -253,6 +254,9 @@ public class ProtoConverter {
         }
 
         switch (value.getValueCase()) {
+            case IS_NULL:
+                // Explicit null marker - return null
+                return null;
             case BOOL_VALUE:
                 return value.getBoolValue();
             case INT_VALUE:
@@ -267,8 +271,18 @@ public class ProtoConverter {
                 return value.getStringValue();
             case BYTES_VALUE:
                 byte[] bytes = value.getBytesValue().toByteArray();
+                // Empty byte array is now valid - only return null if is_null is set
+                // For backward compatibility, if bytes are empty and we're not in a binary type context,
+                // we'll check if it could be a legacy null value, but for binary types (BYTES, BLOB)
+                // we preserve empty arrays
                 if (bytes.length == 0) {
-                    return null;
+                    // For binary data types, empty byte array is valid
+                    if (type != null && !shouldDeserializeBytes(type)) {
+                        // Binary data types (BYTES, BLOB, BINARY_STREAM) - return empty byte array
+                        return bytes;
+                    }
+                    // For other types, empty bytes might indicate legacy null (backward compatibility)
+                    // but could also be an empty serialized object - try to deserialize
                 }
                 
                 // Determine if bytes should be deserialized based on ParameterType
