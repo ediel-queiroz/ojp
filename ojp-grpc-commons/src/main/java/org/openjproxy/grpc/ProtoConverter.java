@@ -279,13 +279,12 @@ public class ProtoConverter {
                     return bytes;
                 }
                 
-                // For non-binary types that might be serialized objects
-                // If bytes are empty, try to deserialize (may represent a legacy null or empty object)
+                // For non-binary types that might be serialized objects, attempt deserialization
                 try {
                     return SerializationHandler.deserialize(bytes, Object.class);
                 } catch (RuntimeException e) {
-                    // If deserialization fails (e.g., StreamCorruptedException for BLOB data,
-                    // EOFException for truncated data), return raw bytes
+                    // If deserialization fails (e.g., StreamCorruptedException, EOFException),
+                    // return raw bytes
                     return bytes;
                 }
             case INT_ARRAY_VALUE:

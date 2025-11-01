@@ -116,19 +116,18 @@ public class ProtoConverterTest {
 
     @Test
     void testBackwardCompatibilityForNonBinaryTypes() {
-        // For non-binary types (like OBJECT), empty bytes might indicate legacy null
+        // For non-binary types (like OBJECT), empty bytes should be handled gracefully
         // This tests that our change doesn't break existing behavior
         ParameterValue emptyBytesPv = ParameterValue.newBuilder()
                 .setBytesValue(com.google.protobuf.ByteString.EMPTY)
                 .build();
         
         // For OBJECT type, empty bytes should be handled gracefully (no crash)
+        // Deserialization may fail for empty bytes, in which case raw bytes are returned
         Object result = ProtoConverter.fromParameterValue(emptyBytesPv, ParameterType.OBJECT);
-        // Result could be null or empty bytes depending on deserialization
-        // The key is that it doesn't crash - we just verify the call completes
-        assertNotNull(emptyBytesPv, "ParameterValue should be created");
-        // If deserialization fails, result should be an empty byte array
-        if (result != null && result instanceof byte[]) {
+        
+        // If deserialization fails, the result will be the raw byte array
+        if (result instanceof byte[]) {
             assertEquals(0, ((byte[]) result).length, "Empty bytes should remain empty");
         }
     }
