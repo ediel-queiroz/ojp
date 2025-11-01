@@ -195,6 +195,8 @@ public class ResultSet extends RemoteProxyResultSet {
             return ((byte[]) lastValueRead)[0];
         } else if (lastValueRead instanceof Short) {
             return (byte)(short) lastValueRead;
+        } else if (lastValueRead instanceof Integer) {
+            return (byte)(int) lastValueRead;
         }
         return (byte) lastValueRead;
     }
@@ -208,6 +210,8 @@ public class ResultSet extends RemoteProxyResultSet {
         lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
         if (lastValueRead == null) {
             return 0;
+        } else if (lastValueRead instanceof Integer) {
+            return (short)(int) lastValueRead;
         }
         return (short) lastValueRead;
     }
