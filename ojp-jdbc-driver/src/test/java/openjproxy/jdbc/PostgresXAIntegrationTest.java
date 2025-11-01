@@ -37,11 +37,11 @@ public class PostgresXAIntegrationTest {
     @BeforeAll
     public static void checkTestConfiguration() {
         // Enable by default for testing
-        isTestDisabled = Boolean.parseBoolean(System.getProperty("disablePostgresXATests", "false"));
+        isTestDisabled = Boolean.parseBoolean(System.getProperty("disablePostgresTests", "false"));
     }
 
     public void setUp(String driverClass, String url, String user, String password, boolean isXA) throws SQLException {
-        assumeFalse(isTestDisabled, "Postgres XA tests are disabled. Enable with -DdisablePostgresXATests=false");
+        assumeFalse(isTestDisabled, "Postgres XA tests are disabled. Enable with -DdisablePostgresTests=false");
         
         // Create XA DataSource
         OjpXADataSource xaDataSource = new OjpXADataSource();
