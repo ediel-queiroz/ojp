@@ -271,34 +271,22 @@ public class ProtoConverter {
                 return value.getStringValue();
             case BYTES_VALUE:
                 byte[] bytes = value.getBytesValue().toByteArray();
-                // Empty byte array is now valid - only return null if is_null is set
-                // For backward compatibility, if bytes are empty and we're not in a binary type context,
-                // we'll check if it could be a legacy null value, but for binary types (BYTES, BLOB)
-                // we preserve empty arrays
-                if (bytes.length == 0) {
-                    // For binary data types, empty byte array is valid
-                    if (type != null && !shouldDeserializeBytes(type)) {
-                        // Binary data types (BYTES, BLOB, BINARY_STREAM) - return empty byte array
-                        return bytes;
-                    }
-                    // For other types, empty bytes might indicate legacy null (backward compatibility)
-                    // but could also be an empty serialized object - try to deserialize
+                
+                // For binary data types (BYTES, BLOB, BINARY_STREAM), preserve empty byte arrays
+                // and don't attempt deserialization
+                if (type != null && !shouldDeserializeBytes(type)) {
+                    // Binary data types - return raw bytes (including empty arrays)
+                    return bytes;
                 }
                 
-                // Determine if bytes should be deserialized based on ParameterType
-                if (type != null && !shouldDeserializeBytes(type)) {
-                    // Binary data types (BYTES, BLOB, BINARY_STREAM) - return raw bytes
+                // For non-binary types that might be serialized objects
+                // If bytes are empty, try to deserialize (may represent a legacy null or empty object)
+                try {
+                    return SerializationHandler.deserialize(bytes, Object.class);
+                } catch (RuntimeException e) {
+                    // If deserialization fails (e.g., StreamCorruptedException for BLOB data,
+                    // EOFException for truncated data), return raw bytes
                     return bytes;
-                } else {
-                    // Try to deserialize for complex types and result set data
-                    // This handles both serialized complex types (BigDecimal, Date) and raw binary data (BLOBs)
-                    try {
-                        return SerializationHandler.deserialize(bytes, Object.class);
-                    } catch (RuntimeException e) {
-                        // If deserialization fails (e.g., StreamCorruptedException for BLOB data,
-                        // EOFException for truncated data), return raw bytes
-                        return bytes;
-                    }
                 }
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]

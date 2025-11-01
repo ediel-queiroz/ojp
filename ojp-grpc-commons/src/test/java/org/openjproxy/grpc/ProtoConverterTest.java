@@ -122,10 +122,14 @@ public class ProtoConverterTest {
                 .setBytesValue(com.google.protobuf.ByteString.EMPTY)
                 .build();
         
-        // For OBJECT type, empty bytes should be handled gracefully
+        // For OBJECT type, empty bytes should be handled gracefully (no crash)
         Object result = ProtoConverter.fromParameterValue(emptyBytesPv, ParameterType.OBJECT);
-        // The result depends on deserialization - could be null or empty bytes
-        // The key is that it doesn't crash
-        assertNotNull(emptyBytesPv);
+        // Result could be null or empty bytes depending on deserialization
+        // The key is that it doesn't crash - we just verify the call completes
+        assertNotNull(emptyBytesPv, "ParameterValue should be created");
+        // If deserialization fails, result should be an empty byte array
+        if (result != null && result instanceof byte[]) {
+            assertEquals(0, ((byte[]) result).length, "Empty bytes should remain empty");
+        }
     }
 }
