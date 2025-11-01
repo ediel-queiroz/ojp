@@ -275,17 +275,14 @@ public class ProtoConverter {
                 if (type != null && !shouldDeserializeBytes(type)) {
                     // Binary data types (BYTES, BLOB, BINARY_STREAM) - return raw bytes
                     return bytes;
-                } else if (type != null) {
-                    // Complex types (OBJECT, ARRAY, etc.) with known type - deserialize
-                    return SerializationHandler.deserialize(bytes, Object.class);
                 } else {
-                    // Unknown type (result set data) - try to deserialize, but return raw bytes if it fails
+                    // Try to deserialize for complex types and result set data
                     // This handles both serialized complex types (BigDecimal, Date) and raw binary data (BLOBs)
                     try {
                         return SerializationHandler.deserialize(bytes, Object.class);
                     } catch (RuntimeException e) {
-                        // If deserialization fails (e.g., StreamCorruptedException for BLOB data),
-                        // return raw bytes
+                        // If deserialization fails (e.g., StreamCorruptedException for BLOB data,
+                        // EOFException for truncated data), return raw bytes
                         return bytes;
                     }
                 }
