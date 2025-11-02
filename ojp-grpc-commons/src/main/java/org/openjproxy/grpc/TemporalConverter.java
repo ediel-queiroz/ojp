@@ -4,6 +4,7 @@ import com.google.protobuf.Timestamp;
 import com.google.type.Date;
 import com.google.type.TimeOfDay;
 import com.openjproxy.grpc.TimestampWithZone;
+import com.openjproxy.grpc.TemporalType;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
@@ -13,11 +14,15 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+import java.util.TimeZone;
 
 /**
  * Utility class for converting between Java temporal types and Protocol Buffer messages.
  * Handles conversions for:
  * - java.sql.Timestamp + ZoneId <-> TimestampWithZone (google.protobuf.Timestamp + timezone string)
+ * - java.util.Calendar <-> TimestampWithZone (with original type tracking)
  * - java.sql.Date <-> google.type.Date
  * - java.sql.Time <-> google.type.TimeOfDay
  */
@@ -27,6 +32,7 @@ public class TemporalConverter {
 
     /**
      * Convert java.sql.Timestamp and ZoneId to TimestampWithZone proto message.
+     * Sets original_type to TIMESTAMP.
      * 
      * @param timestamp The timestamp to convert (can be null)
      * @param zoneId The timezone (must not be null if timestamp is not null)
@@ -54,16 +60,52 @@ public class TemporalConverter {
             .setNanos(instant.getNano())
             .build();
         
-        // Build TimestampWithZone with timezone string
+        // Build TimestampWithZone with timezone string and original type
         return TimestampWithZone.newBuilder()
             .setInstant(protoTimestamp)
             .setTimezone(zoneId.getId())
+            .setOriginalType(TemporalType.TEMPORAL_TYPE_TIMESTAMP)
+            .build();
+    }
+    
+    /**
+     * Convert java.util.Calendar to TimestampWithZone proto message.
+     * Sets original_type to CALENDAR.
+     * 
+     * @param calendar The calendar to convert (can be null)
+     * @return TimestampWithZone proto message, or null if calendar is null
+     */
+    public static TimestampWithZone calendarToTimestampWithZone(Calendar calendar) {
+        if (calendar == null) {
+            return null;
+        }
+        
+        // Extract timestamp and timezone from Calendar
+        java.sql.Timestamp timestamp = new java.sql.Timestamp(calendar.getTimeInMillis());
+        ZoneId zoneId = calendar.getTimeZone().toZoneId();
+        
+        // Convert timestamp to Instant to get epoch seconds and nanos
+        Instant instant = timestamp.toInstant();
+        
+        // Build google.protobuf.Timestamp
+        Timestamp protoTimestamp = Timestamp.newBuilder()
+            .setSeconds(instant.getEpochSecond())
+            .setNanos(instant.getNano())
+            .build();
+        
+        // Build TimestampWithZone with timezone string and original type
+        return TimestampWithZone.newBuilder()
+            .setInstant(protoTimestamp)
+            .setTimezone(zoneId.getId())
+            .setOriginalType(TemporalType.TEMPORAL_TYPE_CALENDAR)
             .build();
     }
     
     /**
      * Convert TimestampWithZone proto message to java.sql.Timestamp.
      * The timezone is parsed and can be retrieved via getZoneIdFromTimestampWithZone.
+     * Note: This method always returns Timestamp regardless of original_type.
+     * Use fromTimestampWithZoneToObject for automatic type conversion.
      * 
      * @param timestampWithZone The proto message (can be null)
      * @return java.sql.Timestamp, or null if input is null
@@ -100,6 +142,75 @@ public class TemporalConverter {
         
         // Preserve exact epoch seconds + nanos
         return java.sql.Timestamp.from(instant);
+    }
+    
+    /**
+     * Convert TimestampWithZone proto message to the appropriate Java type
+     * based on the original_type field.
+     * 
+     * @param timestampWithZone The proto message (can be null)
+     * @return java.sql.Timestamp or java.util.Calendar based on original_type, or null if input is null
+     * @throws IllegalArgumentException if timezone is missing or empty
+     */
+    public static Object fromTimestampWithZoneToObject(TimestampWithZone timestampWithZone) {
+        if (timestampWithZone == null) {
+            return null;
+        }
+        
+        // Check original_type to determine return type
+        TemporalType originalType = timestampWithZone.getOriginalType();
+        
+        // If original type was Calendar, reconstruct it
+        if (originalType == TemporalType.TEMPORAL_TYPE_CALENDAR) {
+            return timestampWithZoneToCalendar(timestampWithZone);
+        }
+        
+        // Default to Timestamp (covers TEMPORAL_TYPE_TIMESTAMP and TEMPORAL_TYPE_UNSPECIFIED)
+        return fromTimestampWithZone(timestampWithZone);
+    }
+    
+    /**
+     * Convert TimestampWithZone proto message to java.util.Calendar.
+     * 
+     * @param timestampWithZone The proto message (can be null)
+     * @return java.util.GregorianCalendar, or null if input is null
+     * @throws IllegalArgumentException if timezone is missing or empty
+     */
+    public static Calendar timestampWithZoneToCalendar(TimestampWithZone timestampWithZone) {
+        if (timestampWithZone == null) {
+            return null;
+        }
+        
+        // Validate timezone is present
+        String timezone = timestampWithZone.getTimezone();
+        if (timezone == null || timezone.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                "Timezone must not be empty or missing in TimestampWithZone. " +
+                "Server requires timezone to be set by the client."
+            );
+        }
+        
+        // Parse timezone
+        ZoneId zoneId;
+        try {
+            zoneId = ZoneId.of(timezone);
+        } catch (Exception e) {
+            log.debug("Failed to parse timezone '{}': {}", timezone, e.getMessage());
+            throw new IllegalArgumentException("Invalid timezone string: " + timezone, e);
+        }
+        
+        // Convert proto timestamp to Instant
+        Timestamp protoTimestamp = timestampWithZone.getInstant();
+        Instant instant = Instant.ofEpochSecond(
+            protoTimestamp.getSeconds(),
+            protoTimestamp.getNanos()
+        );
+        
+        // Create Calendar with the correct timezone
+        Calendar calendar = new GregorianCalendar(TimeZone.getTimeZone(zoneId));
+        calendar.setTimeInMillis(instant.toEpochMilli());
+        
+        return calendar;
     }
     
     /**

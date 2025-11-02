@@ -2,7 +2,6 @@ package org.openjproxy.jdbc;
 
 import org.junit.jupiter.api.Test;
 import org.openjproxy.constants.CommonConstants;
-import org.openjproxy.grpc.SerializationHandler;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -68,20 +67,20 @@ public class ConnectionPoolConfigurationTest {
     }
 
     @Test
-    public void testPropertiesSerialization() {
+    public void testPropertiesSerialization() throws Exception {
         // Test that we can serialize and deserialize properties
         Properties originalProperties = new Properties();
         originalProperties.setProperty("maximumPoolSize", "25");
         originalProperties.setProperty("minimumIdle", "2");
         originalProperties.setProperty("poolName", "SerializationTestPool");
         
-        // Serialize
-        byte[] serialized = SerializationHandler.serialize(originalProperties);
+        // Serialize using ProtoSerialization
+        byte[] serialized = org.openjproxy.grpc.transport.ProtoSerialization.serializeToTransport(originalProperties);
         assertNotNull(serialized);
         assertTrue(serialized.length > 0);
         
-        // Deserialize
-        Properties deserializedProperties = SerializationHandler.deserialize(serialized, Properties.class);
+        // Deserialize using ProtoSerialization
+        Properties deserializedProperties = org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(serialized, Properties.class);
         assertNotNull(deserializedProperties);
         assertEquals("25", deserializedProperties.getProperty("maximumPoolSize"));
         assertEquals("2", deserializedProperties.getProperty("minimumIdle"));

@@ -1,23 +1,123 @@
-# Protocol Buffer Non-Java Serialization: UUID, URL, and RowId
+# Protocol Buffer Non-Java Serialization
 
 ## Overview
 
-This document describes the language-independent encoding of `java.util.UUID`, `java.net.URL`, and `java.sql.RowId` types in Protocol Buffer messages for the Open-J-Proxy (OJP) project. These changes replace Java object serialization with string-based representations, enabling cross-language compatibility.
+This document describes the language-independent encoding of various types in Protocol Buffer messages for the Open-J-Proxy (OJP) project. These changes replace Java object serialization with protobuf-based representations, enabling cross-language compatibility.
 
 ## Motivation
 
-Previously, UUID, URL, and RowId objects were serialized using Java's `ObjectOutputStream` and transmitted as opaque byte arrays in protobuf `bytes` fields. This approach had several limitations:
+Previously, various objects were serialized using Java's `ObjectOutputStream` and transmitted as opaque byte arrays in protobuf `bytes` fields. This approach had several limitations:
 
 1. **Language Lock-In**: Only Java clients/servers could deserialize these objects
 2. **Tight Coupling**: Required exact Java class versions and serialization compatibility
 3. **Non-Standard**: Java serialization is not a standard wire protocol
 4. **Fragile**: Changes to Java classes could break serialization compatibility
 
-The new approach uses **string-based encoding** with **presence-aware wrappers** (`google.protobuf.StringValue`) to enable:
+The new approach uses **protobuf-based encoding** to enable:
 - Cross-language interoperability
 - Human-readable representations in logs and debugging
 - Stable wire format independent of Java class changes
-- Proper distinction between `null` and empty string values
+- Proper distinction between `null` and empty values
+
+## Supported Types
+
+### 1. Containers (Maps, Lists, Properties)
+
+**Proto File**: `ojp-grpc-commons/src/main/proto/containers.proto`
+**Package**: `ojp.transport.v1`
+**Java Class**: `org.openjproxy.grpc.transport.ProtoSerialization`
+
+#### Container Message
+All serializable containers are wrapped in a `Container` message for type-safe deserialization:
+
+```protobuf
+message Container {
+  oneof content {
+    Value value = 1;          // Primitive value or nested structure
+    Object object = 2;        // Map/Object
+    Array array = 3;          // List/Array
+    Properties properties = 4; // Properties (String -> String map)
+  }
+}
+```
+
+#### Supported Container Types
+
+**Map<String, Object>**
+```java
+Map<String, Object> map = new LinkedHashMap<>();
+map.put("key1", "value1");
+map.put("nested", nestedMap);
+
+byte[] bytes = ProtoSerialization.serializeToTransport(map);
+Map<String, Object> result = ProtoSerialization.deserializeFromTransport(bytes, Map.class);
+```
+
+**List<Object>**
+```java
+List<Object> list = new ArrayList<>();
+list.add("item1");
+list.add(42);
+list.add(nestedList);
+
+byte[] bytes = ProtoSerialization.serializeToTransport(list);
+List<Object> result = ProtoSerialization.deserializeFromTransport(bytes, List.class);
+```
+
+**Properties**
+```java
+Properties props = new Properties();
+props.setProperty("key", "value");
+
+byte[] bytes = ProtoSerialization.serializeToTransport(props);
+Properties result = ProtoSerialization.deserializeFromTransport(bytes, Properties.class);
+```
+
+#### Supported Value Types
+- `String`
+- `Number` (Integer, Long, Float, Double) - all stored as `double`
+- `Boolean`
+- `null`
+- Nested `Map<String, Object>`
+- Nested `List<Object>`
+
+#### Limitations
+- Map keys must be Strings
+- Numbers are stored as `double` (very large `long` values may lose precision)
+- Arbitrary Java objects/POJOs are NOT supported - will throw `SerializationException`
+- Only the types listed above can be nested within containers
+
+#### Usage Example
+```java
+import org.openjproxy.grpc.transport.ProtoSerialization;
+import org.openjproxy.grpc.transport.ProtoSerialization.SerializationException;
+
+try {
+    Map<String, Object> data = new LinkedHashMap<>();
+    data.put("string", "hello");
+    data.put("number", 42);
+    data.put("boolean", true);
+    data.put("null", null);
+    
+    List<Object> list = new ArrayList<>();
+    list.add("item1");
+    list.add(123);
+    data.put("list", list);
+    
+    // Serialize
+    byte[] bytes = ProtoSerialization.serializeToTransport(data);
+    
+    // Deserialize
+    Map<String, Object> result = ProtoSerialization.deserializeFromTransport(bytes, Map.class);
+} catch (SerializationException e) {
+    // Handle unsupported types or invalid data
+}
+```
+
+### 2. UUID, URL, and RowId
+
+**Proto File**: `ojp-grpc-commons/src/main/proto/StatementService.proto`
+**Helper Class**: `org.openjproxy.grpc.ProtoTypeConverters`
 
 ## Encoding Rules
 

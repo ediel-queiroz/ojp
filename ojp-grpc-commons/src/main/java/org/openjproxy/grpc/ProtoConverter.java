@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.StringValue;
 import com.openjproxy.grpc.IntArray;
 import com.openjproxy.grpc.LongArray;
+import com.openjproxy.grpc.StringArray;
 import com.openjproxy.grpc.OpQueryResultProto;
 import com.openjproxy.grpc.ParameterProto;
 import com.openjproxy.grpc.ParameterTypeProto;
@@ -21,16 +22,21 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URL;
 import java.sql.Date;
 import java.sql.RowId;
+import java.sql.RowIdLifetime;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Converter between Java DTOs and Protocol Buffer messages.
@@ -322,13 +328,52 @@ public class ProtoConverter {
                 // This branch shouldn't be reached since value is not null, but handle defensively
                 builder.setIsNull(true);
             }
+        } else if (value instanceof UUID) {
+            // java.util.UUID - convert to canonical string representation
+            Optional<StringValue> uuidWrapper = ProtoTypeConverters.uuidToProto((UUID) value);
+            if (uuidWrapper.isPresent()) {
+                builder.setUuidValue(uuidWrapper.get());
+            } else {
+                // This branch shouldn't be reached since value is not null, but handle defensively
+                builder.setIsNull(true);
+            }
+        } else if (value instanceof BigInteger) {
+            // java.math.BigInteger - convert to decimal string representation
+            builder.setBigintegerValue(StringValue.of(((BigInteger) value).toString()));
+        } else if (value instanceof RowIdLifetime) {
+            // java.sql.RowIdLifetime - convert to enum name string
+            builder.setRowidlifetimeValue(StringValue.of(((RowIdLifetime) value).name()));
+        } else if (value instanceof String[]) {
+            // String array for JDBC methods like execute(sql, String[] columnNames)
+            String[] arr = (String[]) value;
+            StringArray.Builder stringArrayBuilder = StringArray.newBuilder();
+            for (String s : arr) {
+                if (s != null) {
+                    stringArrayBuilder.addValues(s);
+                } else {
+                    stringArrayBuilder.addValues("");  // Treat null as empty string in arrays
+                }
+            }
+            builder.setStringArrayValue(stringArrayBuilder.build());
+        } else if (value instanceof Calendar) {
+            // java.util.Calendar or GregorianCalendar - convert to TimestampWithZone
+            // Use calendarToTimestampWithZone to preserve original type as CALENDAR
+            builder.setTimestampValue(TemporalConverter.calendarToTimestampWithZone((Calendar) value));
+        } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
+            // For Map, List, and Properties objects, use protobuf serialization
+            // instead of Java serialization for language independence
+            try {
+                byte[] protoBytes = org.openjproxy.grpc.transport.ProtoSerialization.serializeToTransport(value);
+                builder.setBytesValue(ByteString.copyFrom(protoBytes));
+            } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
+            }
         } else {
-            // For all other complex types (Map, Blob, Clob, etc.),
-            // use Java serialization to preserve exact type information.
-            // Note: Date/Time/Timestamp/URL/RowId should never reach here as they are now handled
-            // via typed proto fields (timestamp_value, date_value, time_value, url_value, rowid_value)
-            // instead of Java serialization. The checks above enforce this.
-            builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
+            // For all other complex types, throw an exception as they are not supported
+            // Only primitives, Maps, Lists, Properties, and null are supported for transport
+            throw new IllegalArgumentException(
+                    "Unsupported parameter value type: " + value.getClass().getName() +
+                    ". Only primitives, Map, List, Properties, and null are supported.");
         }
 
         return builder.build();
@@ -443,38 +488,30 @@ public class ProtoConverter {
                     }
                 }
                 
-                // When type is unknown, check if bytes look like Java serialization (starts with 0xAC 0xED)
-                // If not, try BigDecimalWire first
+                // When type is unknown, check if bytes look like protobuf Container message
+                // Try protobuf first for Map/List/Properties.
                 if (type == null && bytes.length > 0) {
-                    boolean looksLikeJavaSerialization = bytes.length >= 2 && 
-                        (bytes[0] & 0xFF) == 0xAC && (bytes[1] & 0xFF) == 0xED;
-                    
-                    if (!looksLikeJavaSerialization) {
-                        // Try BigDecimalWire first for non-Java-serialized bytes
+                    // Try protobuf Container first (for Map/List/Properties)
+                    try {
+                        return org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
+                    } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                        // Not a protobuf Container, try BigDecimalWire
                         try {
                             ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
                             DataInputStream dis = new DataInputStream(bais);
                             BigDecimal result = BigDecimalWire.readBigDecimal(dis);
                             // Only return if we got a non-null result
-                            // Null could mean the first byte was 0, which might be coincidental
                             if (result != null) {
                                 return result;
                             }
-                            // If null, continue to try Java serialization
-                        } catch (IOException e) {
-                            // Not a BigDecimal, will try Java serialization next
+                        } catch (IOException ex) {
+                            // Not a BigDecimal either
                         }
                     }
                 }
                 
-                // For non-binary types that might be serialized objects, attempt deserialization
-                try {
-                    return SerializationHandler.deserialize(bytes, Object.class);
-                } catch (RuntimeException e) {
-                    // If deserialization fails (e.g., StreamCorruptedException, EOFException),
-                    // return raw bytes
-                    return bytes;
-                }
+                // For unknown bytes that couldn't be deserialized, return raw bytes
+                return bytes;
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
                 IntArray intArray = value.getIntArrayValue();
@@ -492,9 +529,9 @@ public class ProtoConverter {
                 }
                 return longArr;
             case TIMESTAMP_VALUE:
-                // Convert TimestampWithZone proto message to java.sql.Timestamp
-                // The server enforces timezone presence, so this should never fail on missing timezone
-                return TemporalConverter.fromTimestampWithZone(value.getTimestampValue());
+                // Convert TimestampWithZone proto message to appropriate Java type
+                // Returns java.sql.Timestamp or java.util.Calendar based on original_type
+                return TemporalConverter.fromTimestampWithZoneToObject(value.getTimestampValue());
             case DATE_VALUE:
                 // Convert google.type.Date proto message to java.sql.Date
                 return TemporalConverter.fromProtoDate(value.getDateValue());
@@ -510,6 +547,32 @@ public class ProtoConverter {
                 // Cannot reconstruct java.sql.RowId from bytes alone
                 // Return bytes for use by database layer
                 return ProtoTypeConverters.rowIdBytesFromProto(value.getRowidValue());
+            case UUID_VALUE:
+                // Convert StringValue proto wrapper to java.util.UUID
+                return ProtoTypeConverters.uuidFromProto(value.getUuidValue());
+            case BIGINTEGER_VALUE:
+                // Convert StringValue proto wrapper to java.math.BigInteger
+                StringValue bigIntWrapper = value.getBigintegerValue();
+                if (bigIntWrapper != null && !bigIntWrapper.getValue().isEmpty()) {
+                    return new BigInteger(bigIntWrapper.getValue());
+                }
+                return null;
+            case ROWIDLIFETIME_VALUE:
+                // Convert StringValue proto wrapper to java.sql.RowIdLifetime
+                StringValue rowidLifetimeWrapper = value.getRowidlifetimeValue();
+                if (rowidLifetimeWrapper != null && !rowidLifetimeWrapper.getValue().isEmpty()) {
+                    return RowIdLifetime.valueOf(rowidLifetimeWrapper.getValue());
+                }
+                return null;
+            case STRING_ARRAY_VALUE:
+                // Convert StringArray proto message to String[]
+                StringArray stringArray = value.getStringArrayValue();
+                String[] strArr = new String[stringArray.getValuesCount()];
+                for (int i = 0; i < stringArray.getValuesCount(); i++) {
+                    String s = stringArray.getValues(i);
+                    strArr[i] = s.isEmpty() ? null : s;  // Treat empty string as null
+                }
+                return strArr;
             case VALUE_NOT_SET:
             default:
                 return null;
@@ -681,9 +744,19 @@ public class ProtoConverter {
                 } catch (IOException e) {
                     throw new RuntimeException("Failed to serialize BigDecimal", e);
                 }
+            } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
+                // For Map, List, and Properties objects, use protobuf serialization
+                try {
+                    byte[] protoBytes = org.openjproxy.grpc.transport.ProtoSerialization.serializeToTransport(value);
+                    builder.setBytesValue(ByteString.copyFrom(protoBytes));
+                } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                    throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
+                }
             } else {
-                // For complex objects, serialize as bytes
-                builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
+                // For complex objects that are not supported, throw an exception
+                throw new IllegalArgumentException(
+                        "Unsupported property value type: " + value.getClass().getName() +
+                        ". Only primitives, BigDecimal, Map, List, Properties, and null are supported.");
             }
 
             entries.add(builder.build());
@@ -723,12 +796,13 @@ public class ProtoConverter {
                     value = entry.getStringValue();
                     break;
                 case BYTES_VALUE:
-                    // Try to deserialize as Object first
+                    // Try to deserialize as protobuf Container for Map/List/Properties
                     byte[] bytes = entry.getBytesValue().toByteArray();
                     try {
-                        value = SerializationHandler.deserialize(bytes, Object.class);
-                    } catch (Exception e) {
-                        // If deserialization fails, keep as byte array
+                        // Try protobuf deserialization first for Map/List/Properties
+                        value = org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
+                    } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                        // Not a protobuf message, return raw bytes
                         value = bytes;
                     }
                     break;
