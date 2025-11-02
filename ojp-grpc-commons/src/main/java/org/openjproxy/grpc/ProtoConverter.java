@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.StringValue;
 import com.openjproxy.grpc.IntArray;
 import com.openjproxy.grpc.LongArray;
+import com.openjproxy.grpc.StringArray;
 import com.openjproxy.grpc.OpQueryResultProto;
 import com.openjproxy.grpc.ParameterProto;
 import com.openjproxy.grpc.ParameterTypeProto;
@@ -21,16 +22,20 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URL;
 import java.sql.Date;
 import java.sql.RowId;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Converter between Java DTOs and Protocol Buffer messages.
@@ -322,6 +327,37 @@ public class ProtoConverter {
                 // This branch shouldn't be reached since value is not null, but handle defensively
                 builder.setIsNull(true);
             }
+        } else if (value instanceof UUID) {
+            // java.util.UUID - convert to canonical string representation
+            Optional<StringValue> uuidWrapper = ProtoTypeConverters.uuidToProto((UUID) value);
+            if (uuidWrapper.isPresent()) {
+                builder.setUuidValue(uuidWrapper.get());
+            } else {
+                // This branch shouldn't be reached since value is not null, but handle defensively
+                builder.setIsNull(true);
+            }
+        } else if (value instanceof BigInteger) {
+            // java.math.BigInteger - convert to decimal string representation
+            builder.setBigintegerValue(StringValue.of(((BigInteger) value).toString()));
+        } else if (value instanceof String[]) {
+            // String array for JDBC methods like execute(sql, String[] columnNames)
+            String[] arr = (String[]) value;
+            StringArray.Builder stringArrayBuilder = StringArray.newBuilder();
+            for (String s : arr) {
+                if (s != null) {
+                    stringArrayBuilder.addValues(s);
+                } else {
+                    stringArrayBuilder.addValues("");  // Treat null as empty string in arrays
+                }
+            }
+            builder.setStringArrayValue(stringArrayBuilder.build());
+        } else if (value instanceof Calendar) {
+            // java.util.Calendar or GregorianCalendar - convert to TimestampWithZone
+            // Extract timestamp and timezone from Calendar
+            Calendar cal = (Calendar) value;
+            Timestamp timestamp = new Timestamp(cal.getTimeInMillis());
+            java.time.ZoneId zoneId = cal.getTimeZone().toZoneId();
+            return toParameterValue(timestamp, zoneId);
         } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
             // For Map, List, and Properties objects, use protobuf serialization
             // instead of Java serialization for language independence
@@ -510,6 +546,25 @@ public class ProtoConverter {
                 // Cannot reconstruct java.sql.RowId from bytes alone
                 // Return bytes for use by database layer
                 return ProtoTypeConverters.rowIdBytesFromProto(value.getRowidValue());
+            case UUID_VALUE:
+                // Convert StringValue proto wrapper to java.util.UUID
+                return ProtoTypeConverters.uuidFromProto(value.getUuidValue());
+            case BIGINTEGER_VALUE:
+                // Convert StringValue proto wrapper to java.math.BigInteger
+                StringValue bigIntWrapper = value.getBigintegerValue();
+                if (bigIntWrapper != null && !bigIntWrapper.getValue().isEmpty()) {
+                    return new BigInteger(bigIntWrapper.getValue());
+                }
+                return null;
+            case STRING_ARRAY_VALUE:
+                // Convert StringArray proto message to String[]
+                StringArray stringArray = value.getStringArrayValue();
+                String[] strArr = new String[stringArray.getValuesCount()];
+                for (int i = 0; i < stringArray.getValuesCount(); i++) {
+                    String s = stringArray.getValues(i);
+                    strArr[i] = s.isEmpty() ? null : s;  // Treat empty string as null
+                }
+                return strArr;
             case VALUE_NOT_SET:
             default:
                 return null;

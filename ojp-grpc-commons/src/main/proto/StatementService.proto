@@ -78,6 +78,14 @@ message ParameterValue {
         // Opaque bytes representation - vendor-specific, cannot be reconstructed into java.sql.RowId
         // Presence-aware: unset means null, empty string means zero-length rowid bytes
         google.protobuf.StringValue rowid_value = 15;
+        // UUID encoded as canonical string representation (8-4-4-4-12 hex format)
+        // Presence-aware: unset means null
+        google.protobuf.StringValue uuid_value = 16;
+        // BigInteger encoded as string (decimal representation)
+        // Presence-aware: unset means null
+        google.protobuf.StringValue biginteger_value = 17;
+        // String array for JDBC methods like execute(sql, String[] columnNames)
+        StringArray string_array_value = 18;
     }
 }
 
@@ -89,6 +97,11 @@ message IntArray {
 // Message for long array
 message LongArray {
     repeated int64 values = 1;
+}
+
+// Message for string array
+message StringArray {
+    repeated string values = 1;
 }
 
 // Message representing a JDBC parameter
