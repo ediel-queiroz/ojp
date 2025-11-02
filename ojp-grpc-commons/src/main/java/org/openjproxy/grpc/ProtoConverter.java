@@ -285,23 +285,18 @@ public class ProtoConverter {
                 throw new RuntimeException("Failed to serialize BigDecimal", e);
             }
         } else if (value instanceof Date) {
-            // java.sql.Date - should use toParameterValueDate, but handle here for safety
-            throw new IllegalArgumentException(
-                "java.sql.Date must be converted using toParameterValueDate, not toParameterValue. " +
-                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
-            );
+            // java.sql.Date - convert to typed proto field
+            // This can happen when setObject() is used instead of setDate()
+            return toParameterValueDate(value);
         } else if (value instanceof Time) {
-            // java.sql.Time - should use toParameterValueTime, but handle here for safety
-            throw new IllegalArgumentException(
-                "java.sql.Time must be converted using toParameterValueTime, not toParameterValue. " +
-                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
-            );
+            // java.sql.Time - convert to typed proto field
+            // This can happen when setObject() is used instead of setTime()
+            return toParameterValueTime(value);
         } else if (value instanceof Timestamp) {
-            // java.sql.Timestamp - should use toParameterValue(Timestamp, ZoneId), but handle here for safety
-            throw new IllegalArgumentException(
-                "java.sql.Timestamp must be converted with ZoneId using toParameterValue(Timestamp, ZoneId), not toParameterValue(Object). " +
-                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
-            );
+            // java.sql.Timestamp - convert to typed proto field with system default timezone
+            // This can happen when setObject() is used instead of setTimestamp()
+            // Use system default timezone since no Calendar was provided
+            return toParameterValue((Timestamp) value, java.time.ZoneId.systemDefault());
         } else {
             // For all other complex types (UUID, Map, Blob, Clob, etc.),
             // use Java serialization to preserve exact type information.
