@@ -13,6 +13,11 @@ import org.openjproxy.grpc.dto.OpQueryResult;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Time;
@@ -20,7 +25,6 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Map;
 
 /**
@@ -187,7 +191,7 @@ public class ProtoConverter {
 
     /**
      * Convert a Java object to ParameterValue.
-     * Uses Java serialization for types where exact type preservation is critical.
+     * Uses BigDecimalWire for BigDecimal, Java serialization for other complex types.
      */
     public static ParameterValue toParameterValue(Object value) {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
@@ -232,8 +236,19 @@ public class ProtoConverter {
                 longArrayBuilder.addValues(l);
             }
             builder.setLongArrayValue(longArrayBuilder.build());
+        } else if (value instanceof BigDecimal) {
+            // Use BigDecimalWire for compact, language-neutral serialization
+            try {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                DataOutputStream dos = new DataOutputStream(baos);
+                BigDecimalWire.writeBigDecimal(dos, (BigDecimal) value);
+                dos.flush();
+                builder.setBytesValue(ByteString.copyFrom(baos.toByteArray()));
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to serialize BigDecimal", e);
+            }
         } else {
-            // For all other complex types (BigDecimal, Date, Time, Timestamp, UUID, Map, etc.),
+            // For all other complex types (Date, Time, Timestamp, UUID, Map, etc.),
             // use Java serialization to preserve exact type information.
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
@@ -279,6 +294,41 @@ public class ProtoConverter {
                     return bytes;
                 }
                 
+                // Use BigDecimalWire deserialization for BIG_DECIMAL type
+                if (type == ParameterType.BIG_DECIMAL) {
+                    try {
+                        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                        DataInputStream dis = new DataInputStream(bais);
+                        return BigDecimalWire.readBigDecimal(dis);
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to deserialize BigDecimal", e);
+                    }
+                }
+                
+                // When type is unknown, check if bytes look like Java serialization (starts with 0xAC 0xED)
+                // If not, try BigDecimalWire first
+                if (type == null && bytes.length > 0) {
+                    boolean looksLikeJavaSerialization = bytes.length >= 2 && 
+                        (bytes[0] & 0xFF) == 0xAC && (bytes[1] & 0xFF) == 0xED;
+                    
+                    if (!looksLikeJavaSerialization) {
+                        // Try BigDecimalWire first for non-Java-serialized bytes
+                        try {
+                            ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                            DataInputStream dis = new DataInputStream(bais);
+                            BigDecimal result = BigDecimalWire.readBigDecimal(dis);
+                            // Only return if we got a non-null result
+                            // Null could mean the first byte was 0, which might be coincidental
+                            if (result != null) {
+                                return result;
+                            }
+                            // If null, continue to try Java serialization
+                        } catch (IOException e) {
+                            // Not a BigDecimal, will try Java serialization next
+                        }
+                    }
+                }
+                
                 // For non-binary types that might be serialized objects, attempt deserialization
                 try {
                     return SerializationHandler.deserialize(bytes, Object.class);
@@ -312,7 +362,8 @@ public class ProtoConverter {
     /**
      * Determine if bytes should be deserialized based on ParameterType.
      * Only deserialize for OBJECT and complex types that were serialized.
-     * For binary data types (BYTES, BLOB, BINARY_STREAM), return raw bytes.
+     * For binary data types (BYTES, BINARY_STREAM), return raw bytes.
+     * Note: BLOB, CLOB, etc. are serialized Java objects and should be deserialized.
      */
     private static boolean shouldDeserializeBytes(ParameterType type) {
         // If no type information, try to deserialize (for CallResourceResponse compatibility)
@@ -324,18 +375,18 @@ public class ProtoConverter {
         switch (type) {
             case BYTES:
             case BINARY_STREAM:
-            case BLOB:
             case ASCII_STREAM:
             case UNICODE_STREAM:
             case CHARACTER_READER:
             case N_CHARACTER_STREAM:
                 // These are raw binary/text data - don't deserialize
                 return false;
+            case BLOB:
+            case CLOB:
+            case N_CLOB:
             case OBJECT:
             case ARRAY:
             case REF:
-            case CLOB:
-            case N_CLOB:
             case SQL_XML:
             case BIG_DECIMAL:
             case DATE:
@@ -459,6 +510,17 @@ public class ProtoConverter {
                 builder.setStringValue((String) value);
             } else if (value instanceof byte[]) {
                 builder.setBytesValue(ByteString.copyFrom((byte[]) value));
+            } else if (value instanceof BigDecimal) {
+                // Use BigDecimalWire for compact, language-neutral serialization
+                try {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    DataOutputStream dos = new DataOutputStream(baos);
+                    BigDecimalWire.writeBigDecimal(dos, (BigDecimal) value);
+                    dos.flush();
+                    builder.setBytesValue(ByteString.copyFrom(baos.toByteArray()));
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to serialize BigDecimal", e);
+                }
             } else {
                 // For complex objects, serialize as bytes
                 builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
