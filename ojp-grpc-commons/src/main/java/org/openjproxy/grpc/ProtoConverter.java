@@ -1,6 +1,7 @@
 package org.openjproxy.grpc;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.StringValue;
 import com.openjproxy.grpc.IntArray;
 import com.openjproxy.grpc.LongArray;
 import com.openjproxy.grpc.OpQueryResultProto;
@@ -20,13 +21,16 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URL;
 import java.sql.Date;
+import java.sql.RowId;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Converter between Java DTOs and Protocol Buffer messages.
@@ -297,12 +301,33 @@ public class ProtoConverter {
             // This can happen when setObject() is used instead of setTimestamp()
             // Use system default timezone since no Calendar was provided
             return toParameterValue((Timestamp) value, java.time.ZoneId.systemDefault());
+        } else if (value instanceof URL) {
+            // java.net.URL - convert to string representation using toExternalForm()
+            // Use language-independent string encoding instead of Java serialization
+            Optional<StringValue> urlWrapper = ProtoTypeConverters.urlToProto((URL) value);
+            if (urlWrapper.isPresent()) {
+                builder.setUrlValue(urlWrapper.get());
+            } else {
+                // This branch shouldn't be reached since value is not null, but handle defensively
+                builder.setIsNull(true);
+            }
+        } else if (value instanceof RowId) {
+            // java.sql.RowId - convert to base64-encoded bytes
+            // Use language-independent string encoding instead of Java serialization
+            // RowId bytes are opaque and vendor-specific
+            Optional<StringValue> rowIdWrapper = ProtoTypeConverters.rowIdToProto((RowId) value);
+            if (rowIdWrapper.isPresent()) {
+                builder.setRowidValue(rowIdWrapper.get());
+            } else {
+                // This branch shouldn't be reached since value is not null, but handle defensively
+                builder.setIsNull(true);
+            }
         } else {
-            // For all other complex types (UUID, Map, Blob, Clob, etc.),
+            // For all other complex types (Map, Blob, Clob, etc.),
             // use Java serialization to preserve exact type information.
-            // Note: Date/Time/Timestamp should never reach here as they are now handled
-            // via typed proto fields (timestamp_value, date_value, time_value) instead of
-            // Java serialization. The checks above enforce this.
+            // Note: Date/Time/Timestamp/URL/RowId should never reach here as they are now handled
+            // via typed proto fields (timestamp_value, date_value, time_value, url_value, rowid_value)
+            // instead of Java serialization. The checks above enforce this.
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
@@ -476,6 +501,15 @@ public class ProtoConverter {
             case TIME_VALUE:
                 // Convert google.type.TimeOfDay proto message to java.sql.Time
                 return TemporalConverter.fromProtoTimeOfDay(value.getTimeValue());
+            case URL_VALUE:
+                // Convert StringValue proto wrapper to java.net.URL
+                // Uses language-independent string encoding (URL.toExternalForm)
+                return ProtoTypeConverters.urlFromProto(value.getUrlValue());
+            case ROWID_VALUE:
+                // Convert StringValue proto wrapper to raw bytes (opaque, vendor-specific)
+                // Cannot reconstruct java.sql.RowId from bytes alone
+                // Return bytes for use by database layer
+                return ProtoTypeConverters.rowIdBytesFromProto(value.getRowidValue());
             case VALUE_NOT_SET:
             default:
                 return null;

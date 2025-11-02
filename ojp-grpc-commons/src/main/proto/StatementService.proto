@@ -3,6 +3,7 @@ option java_multiple_files = true;
 package com.openjproxy.grpc;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 import "google/type/date.proto";
 import "google/type/timeofday.proto";
 
@@ -70,6 +71,13 @@ message ParameterValue {
         TimestampWithZone timestamp_value = 11;  // Timestamp with timezone
         google.type.Date date_value = 12;  // Date-only value (year, month, day)
         google.type.TimeOfDay time_value = 13;  // Time-only value (hours, minutes, seconds, nanos)
+        // URL encoded as string: URL.toExternalForm() on write, new URL(string) on read
+        // Presence-aware: unset means null, empty string is a valid (though unusual) URL value
+        google.protobuf.StringValue url_value = 14;
+        // RowId encoded as base64 string of rowId.getBytes()
+        // Opaque bytes representation - vendor-specific, cannot be reconstructed into java.sql.RowId
+        // Presence-aware: unset means null, empty string means zero-length rowid bytes
+        google.protobuf.StringValue rowid_value = 15;
     }
 }
 

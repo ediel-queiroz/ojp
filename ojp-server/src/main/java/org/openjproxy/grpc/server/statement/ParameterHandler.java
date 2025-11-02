@@ -8,6 +8,7 @@ import org.openjproxy.grpc.server.SessionManager;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.net.URL;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Date;
@@ -146,6 +147,28 @@ public class ParameterHandler {
             case NULL: {
                 int sqlType = (int) param.getValues().get(0);
                 ps.setNull(idx, sqlType);
+                break;
+            }
+            case URL: {
+                // URL is now transmitted as java.net.URL object (string-based encoding in proto)
+                Object urlValue = param.getValues().get(0);
+                if (urlValue == null) {
+                    ps.setURL(idx, null);
+                } else {
+                    ps.setURL(idx, (URL) urlValue);
+                }
+                break;
+            }
+            case ROW_ID: {
+                // RowId is transmitted as opaque byte array (base64 in proto)
+                // Cannot reconstruct java.sql.RowId from bytes - use setBytes instead
+                // This matches JDBC behavior where RowId bytes are vendor-specific
+                Object rowIdBytes = param.getValues().get(0);
+                if (rowIdBytes == null) {
+                    ps.setBytes(idx, null);
+                } else {
+                    ps.setBytes(idx, (byte[]) rowIdBytes);
+                }
                 break;
             }
             default:
