@@ -86,6 +86,9 @@ message ParameterValue {
         google.protobuf.StringValue biginteger_value = 17;
         // String array for JDBC methods like execute(sql, String[] columnNames)
         StringArray string_array_value = 18;
+        // RowIdLifetime encoded as enum name string (e.g., "ROWID_VALID_FOREVER")
+        // Presence-aware: unset means null
+        google.protobuf.StringValue rowidlifetime_value = 19;
     }
 }
 

@@ -26,6 +26,7 @@ import java.math.BigInteger;
 import java.net.URL;
 import java.sql.Date;
 import java.sql.RowId;
+import java.sql.RowIdLifetime;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
@@ -339,6 +340,9 @@ public class ProtoConverter {
         } else if (value instanceof BigInteger) {
             // java.math.BigInteger - convert to decimal string representation
             builder.setBigintegerValue(StringValue.of(((BigInteger) value).toString()));
+        } else if (value instanceof RowIdLifetime) {
+            // java.sql.RowIdLifetime - convert to enum name string
+            builder.setRowidlifetimeValue(StringValue.of(((RowIdLifetime) value).name()));
         } else if (value instanceof String[]) {
             // String array for JDBC methods like execute(sql, String[] columnNames)
             String[] arr = (String[]) value;
@@ -554,6 +558,13 @@ public class ProtoConverter {
                 StringValue bigIntWrapper = value.getBigintegerValue();
                 if (bigIntWrapper != null && !bigIntWrapper.getValue().isEmpty()) {
                     return new BigInteger(bigIntWrapper.getValue());
+                }
+                return null;
+            case ROWIDLIFETIME_VALUE:
+                // Convert StringValue proto wrapper to java.sql.RowIdLifetime
+                StringValue rowidLifetimeWrapper = value.getRowidlifetimeValue();
+                if (rowidLifetimeWrapper != null && !rowidLifetimeWrapper.getValue().isEmpty()) {
+                    return RowIdLifetime.valueOf(rowidLifetimeWrapper.getValue());
                 }
                 return null;
             case STRING_ARRAY_VALUE:

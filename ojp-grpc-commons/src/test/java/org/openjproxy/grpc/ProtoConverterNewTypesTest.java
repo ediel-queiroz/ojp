@@ -4,13 +4,14 @@ import com.openjproxy.grpc.ParameterValue;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
+import java.sql.RowIdLifetime;
 import java.util.GregorianCalendar;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test for new types added to ProtoConverter: UUID, BigInteger, String[], Calendar
+ * Test for new types added to ProtoConverter: UUID, BigInteger, String[], Calendar, RowIdLifetime
  */
 public class ProtoConverterNewTypesTest {
 
@@ -59,5 +60,18 @@ public class ProtoConverterNewTypesTest {
         Object result = ProtoConverter.fromParameterValue(value, null);
         assertNotNull(result);
         assertTrue(result instanceof java.sql.Timestamp);
+    }
+
+    @Test
+    public void testRowIdLifetimeRoundTrip() {
+        // Test all enum values
+        for (RowIdLifetime original : RowIdLifetime.values()) {
+            ParameterValue value = ProtoConverter.toParameterValue(original);
+            assertNotNull(value);
+            assertEquals(ParameterValue.ValueCase.ROWIDLIFETIME_VALUE, value.getValueCase());
+            
+            Object result = ProtoConverter.fromParameterValue(value, null);
+            assertEquals(original, result);
+        }
     }
 }
