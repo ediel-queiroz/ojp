@@ -8,7 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.openjproxy.grpc.ProtoConverter;
-import org.openjproxy.grpc.SerializationHandler;
 import org.openjproxy.grpc.server.utils.ConnectionHashGenerator;
 
 import java.lang.reflect.Field;

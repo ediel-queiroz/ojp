@@ -4,7 +4,6 @@ import com.google.protobuf.ByteString;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.openjproxy.grpc.SerializationHandler;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.client.StatementServiceGrpcClient;
 import org.openjproxy.jdbc.UrlParser;

@@ -332,12 +332,11 @@ public class ProtoConverter {
                 throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
             }
         } else {
-            // For all other complex types (Blob, Clob, etc.),
-            // use Java serialization to preserve exact type information.
-            // Note: Date/Time/Timestamp/URL/RowId should never reach here as they are now handled
-            // via typed proto fields (timestamp_value, date_value, time_value, url_value, rowid_value)
-            // instead of Java serialization. The checks above enforce this.
-            builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
+            // For all other complex types, throw an exception as they are not supported
+            // Only primitives, Maps, Lists, Properties, and null are supported for transport
+            throw new IllegalArgumentException(
+                    "Unsupported parameter value type: " + value.getClass().getName() +
+                    ". Only primitives, Map, List, Properties, and null are supported.");
         }
 
         return builder.build();
@@ -452,42 +451,30 @@ public class ProtoConverter {
                     }
                 }
                 
-                // When type is unknown, check if bytes look like Java serialization (starts with 0xAC 0xED)
-                // vs protobuf Container message. Try protobuf first for Map/List/Properties.
+                // When type is unknown, check if bytes look like protobuf Container message
+                // Try protobuf first for Map/List/Properties.
                 if (type == null && bytes.length > 0) {
-                    boolean looksLikeJavaSerialization = bytes.length >= 2 && 
-                        (bytes[0] & 0xFF) == 0xAC && (bytes[1] & 0xFF) == 0xED;
-                    
-                    if (!looksLikeJavaSerialization) {
-                        // Try protobuf Container first (for Map/List/Properties)
+                    // Try protobuf Container first (for Map/List/Properties)
+                    try {
+                        return org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
+                    } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                        // Not a protobuf Container, try BigDecimalWire
                         try {
-                            return org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
-                        } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
-                            // Not a protobuf Container, try BigDecimalWire
-                            try {
-                                ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-                                DataInputStream dis = new DataInputStream(bais);
-                                BigDecimal result = BigDecimalWire.readBigDecimal(dis);
-                                // Only return if we got a non-null result
-                                if (result != null) {
-                                    return result;
-                                }
-                                // If null, continue to try Java serialization
-                            } catch (IOException ex) {
-                                // Not a BigDecimal either, will try Java serialization next
+                            ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                            DataInputStream dis = new DataInputStream(bais);
+                            BigDecimal result = BigDecimalWire.readBigDecimal(dis);
+                            // Only return if we got a non-null result
+                            if (result != null) {
+                                return result;
                             }
+                        } catch (IOException ex) {
+                            // Not a BigDecimal either
                         }
                     }
                 }
                 
-                // For non-binary types that might be serialized objects, attempt deserialization
-                try {
-                    return SerializationHandler.deserialize(bytes, Object.class);
-                } catch (RuntimeException e) {
-                    // If deserialization fails (e.g., StreamCorruptedException, EOFException),
-                    // return raw bytes
-                    return bytes;
-                }
+                // For unknown bytes that couldn't be deserialized, return raw bytes
+                return bytes;
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
                 IntArray intArray = value.getIntArrayValue();
@@ -703,8 +690,10 @@ public class ProtoConverter {
                     throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
                 }
             } else {
-                // For complex objects, serialize as bytes
-                builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
+                // For complex objects that are not supported, throw an exception
+                throw new IllegalArgumentException(
+                        "Unsupported property value type: " + value.getClass().getName() +
+                        ". Only primitives, BigDecimal, Map, List, Properties, and null are supported.");
             }
 
             entries.add(builder.build());
@@ -744,19 +733,14 @@ public class ProtoConverter {
                     value = entry.getStringValue();
                     break;
                 case BYTES_VALUE:
-                    // Try to deserialize as Object first
+                    // Try to deserialize as protobuf Container for Map/List/Properties
                     byte[] bytes = entry.getBytesValue().toByteArray();
                     try {
                         // Try protobuf deserialization first for Map/List/Properties
                         value = org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
                     } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
-                        // Not a protobuf message, try Java serialization
-                        try {
-                            value = SerializationHandler.deserialize(bytes, Object.class);
-                        } catch (Exception ex) {
-                            // If deserialization fails, keep as byte array
-                            value = bytes;
-                        }
+                        // Not a protobuf message, return raw bytes
+                        value = bytes;
                     }
                     break;
                 case VALUE_NOT_SET:

@@ -6,7 +6,6 @@ import com.zaxxer.hikari.HikariConfig;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
-import org.openjproxy.grpc.SerializationHandler;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
