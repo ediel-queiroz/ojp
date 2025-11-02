@@ -70,11 +70,19 @@ public final class BigDecimalWire {
             throw new IOException("BigDecimal unscaled string length exceeds maximum: " + len + " > " + MAX_UNSCALED_LENGTH);
         }
         
+        // Handle zero-length case (represents BigDecimal zero with scale)
         byte[] bytes = new byte[len];
-        in.readFully(bytes);
+        if (len > 0) {
+            in.readFully(bytes);
+        }
         String unscaledStr = new String(bytes, StandardCharsets.UTF_8);
         int scale = in.readInt();
-        BigInteger unscaled = new BigInteger(unscaledStr);
-        return new BigDecimal(unscaled, scale);
+        
+        try {
+            BigInteger unscaled = new BigInteger(unscaledStr);
+            return new BigDecimal(unscaled, scale);
+        } catch (NumberFormatException e) {
+            throw new IOException("Invalid BigDecimal unscaled value: " + unscaledStr, e);
+        }
     }
 }

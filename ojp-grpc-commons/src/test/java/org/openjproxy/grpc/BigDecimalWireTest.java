@@ -9,6 +9,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -153,6 +154,29 @@ public class BigDecimalWireTest {
             dos.writeByte(1);
             // Write excessive length (> MAX_UNSCALED_LENGTH)
             dos.writeInt(20_000_000);
+            dos.flush();
+            
+            // Try to read
+            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+            DataInputStream dis = new DataInputStream(bais);
+            BigDecimalWire.readBigDecimal(dis);
+        });
+    }
+
+    @Test
+    public void testInvalidUnscaledValue() {
+        assertThrows(IOException.class, () -> {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            DataOutputStream dos = new DataOutputStream(baos);
+            
+            // Write presence flag
+            dos.writeByte(1);
+            // Write invalid unscaled value (not a number)
+            String invalidValue = "not-a-number";
+            byte[] bytes = invalidValue.getBytes(StandardCharsets.UTF_8);
+            dos.writeInt(bytes.length);
+            dos.write(bytes);
+            dos.writeInt(2); // scale
             dos.flush();
             
             // Try to read
