@@ -305,14 +305,21 @@ public class ProtoConverter {
                     }
                 }
                 
-                // When type is unknown, try BigDecimalWire first (since we no longer use Java serialization for BigDecimal)
+                // When type is unknown, check if bytes look like Java serialization (starts with 0xAC 0xED)
+                // If not, try BigDecimalWire first
                 if (type == null && bytes.length > 0) {
-                    try {
-                        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-                        DataInputStream dis = new DataInputStream(bais);
-                        return BigDecimalWire.readBigDecimal(dis);
-                    } catch (IOException e) {
-                        // Not a BigDecimal, continue to other deserialization attempts
+                    boolean looksLikeJavaSerialization = bytes.length >= 2 && 
+                        (bytes[0] & 0xFF) == 0xAC && (bytes[1] & 0xFF) == 0xED;
+                    
+                    if (!looksLikeJavaSerialization) {
+                        // Try BigDecimalWire first for non-Java-serialized bytes
+                        try {
+                            ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                            DataInputStream dis = new DataInputStream(bais);
+                            return BigDecimalWire.readBigDecimal(dis);
+                        } catch (IOException e) {
+                            // Not a BigDecimal, will try Java serialization next
+                        }
                     }
                 }
                 
