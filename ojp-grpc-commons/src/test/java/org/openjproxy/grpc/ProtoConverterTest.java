@@ -4,6 +4,8 @@ import com.openjproxy.grpc.ParameterValue;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.grpc.dto.ParameterType;
 
+import java.math.BigDecimal;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -129,6 +131,84 @@ public class ProtoConverterTest {
         // If deserialization fails, the result will be the raw byte array
         if (result instanceof byte[]) {
             assertEquals(0, ((byte[]) result).length, "Empty bytes should remain empty");
+        }
+    }
+
+    @Test
+    void testBigDecimalSerialization() {
+        BigDecimal testValue = new BigDecimal("123.456");
+        ParameterValue pv = ProtoConverter.toParameterValue(testValue);
+        
+        // BigDecimal should be serialized as bytes using BigDecimalWire
+        assertEquals(ParameterValue.ValueCase.BYTES_VALUE, pv.getValueCase());
+        
+        // Convert back to Object with BIG_DECIMAL type
+        Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+        assertNotNull(result);
+        assertTrue(result instanceof BigDecimal);
+        assertEquals(testValue, result);
+    }
+
+    @Test
+    void testBigDecimalNull() {
+        BigDecimal testValue = null;
+        ParameterValue pv = ProtoConverter.toParameterValue(testValue);
+        
+        // Null should set is_null flag
+        assertEquals(ParameterValue.ValueCase.IS_NULL, pv.getValueCase());
+        
+        // Convert back
+        Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+        assertNull(result);
+    }
+
+    @Test
+    void testBigDecimalZero() {
+        BigDecimal testValue = BigDecimal.ZERO;
+        ParameterValue pv = ProtoConverter.toParameterValue(testValue);
+        
+        assertEquals(ParameterValue.ValueCase.BYTES_VALUE, pv.getValueCase());
+        
+        Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+        assertEquals(testValue, result);
+    }
+
+    @Test
+    void testBigDecimalNegative() {
+        BigDecimal testValue = new BigDecimal("-987.654321");
+        ParameterValue pv = ProtoConverter.toParameterValue(testValue);
+        
+        Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+        assertEquals(testValue, result);
+    }
+
+    @Test
+    void testBigDecimalVeryLarge() {
+        BigDecimal testValue = new BigDecimal("123456789012345678901234567890.123456789");
+        ParameterValue pv = ProtoConverter.toParameterValue(testValue);
+        
+        Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+        assertEquals(testValue, result);
+    }
+
+    @Test
+    void testBigDecimalRoundTrip() {
+        // Test multiple BigDecimal values
+        BigDecimal[] testValues = {
+            null,
+            BigDecimal.ZERO,
+            BigDecimal.ONE,
+            BigDecimal.TEN,
+            new BigDecimal("123.456"),
+            new BigDecimal("-789.012"),
+            new BigDecimal("0.000000001"),
+            new BigDecimal("999999999999999999999999999999")
+        };
+        
+        for (BigDecimal original : testValues) {
+            ParameterValue pv = ProtoConverter.toParameterValue(original);
+            Object result = ProtoConverter.fromParameterValue(pv, ParameterType.BIG_DECIMAL);
+            assertEquals(original, result, "Failed for value: " + original);
         }
     }
 }
