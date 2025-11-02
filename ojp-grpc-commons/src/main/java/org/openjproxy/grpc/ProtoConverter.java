@@ -305,6 +305,17 @@ public class ProtoConverter {
                     }
                 }
                 
+                // When type is unknown, try BigDecimalWire first (since we no longer use Java serialization for BigDecimal)
+                if (type == null && bytes.length > 0) {
+                    try {
+                        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                        DataInputStream dis = new DataInputStream(bais);
+                        return BigDecimalWire.readBigDecimal(dis);
+                    } catch (IOException e) {
+                        // Not a BigDecimal, continue to other deserialization attempts
+                    }
+                }
+                
                 // For non-binary types that might be serialized objects, attempt deserialization
                 try {
                     return SerializationHandler.deserialize(bytes, Object.class);
