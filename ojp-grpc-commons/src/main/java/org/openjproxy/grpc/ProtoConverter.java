@@ -356,7 +356,8 @@ public class ProtoConverter {
     /**
      * Determine if bytes should be deserialized based on ParameterType.
      * Only deserialize for OBJECT and complex types that were serialized.
-     * For binary data types (BYTES, BLOB, BINARY_STREAM), return raw bytes.
+     * For binary data types (BYTES, BINARY_STREAM), return raw bytes.
+     * Note: BLOB, CLOB, etc. are serialized Java objects and should be deserialized.
      */
     private static boolean shouldDeserializeBytes(ParameterType type) {
         // If no type information, try to deserialize (for CallResourceResponse compatibility)
@@ -368,18 +369,18 @@ public class ProtoConverter {
         switch (type) {
             case BYTES:
             case BINARY_STREAM:
-            case BLOB:
             case ASCII_STREAM:
             case UNICODE_STREAM:
             case CHARACTER_READER:
             case N_CHARACTER_STREAM:
                 // These are raw binary/text data - don't deserialize
                 return false;
+            case BLOB:
+            case CLOB:
+            case N_CLOB:
             case OBJECT:
             case ARRAY:
             case REF:
-            case CLOB:
-            case N_CLOB:
             case SQL_XML:
             case BIG_DECIMAL:
             case DATE:
