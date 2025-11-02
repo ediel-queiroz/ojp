@@ -222,9 +222,9 @@ class TemporalConverterTest {
         assertEquals(localTime.getHour(), resultLocalTime.getHour());
         assertEquals(localTime.getMinute(), resultLocalTime.getMinute());
         assertEquals(localTime.getSecond(), resultLocalTime.getSecond());
-        // Note: java.sql.Time.valueOf() in Java 11 truncates to milliseconds,
-        // so we can't expect full nanosecond precision through Time object
-        // But the proto format preserves it for systems that need it
+        // Note: java.sql.Time.valueOf(LocalTime) truncates to milliseconds,
+        // so we can't expect full nanosecond precision through Time object.
+        // But the proto format preserves nanos for systems that support it.
     }
     
     @Test

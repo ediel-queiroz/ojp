@@ -305,7 +305,9 @@ public class ProtoConverter {
         } else {
             // For all other complex types (UUID, Map, Blob, Clob, etc.),
             // use Java serialization to preserve exact type information.
-            // Note: Date/Time/Timestamp should never reach here due to checks above
+            // Note: Date/Time/Timestamp should never reach here as they are now handled
+            // via typed proto fields (timestamp_value, date_value, time_value) instead of
+            // Java serialization. The checks above enforce this.
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
@@ -529,8 +531,9 @@ public class ProtoConverter {
             case DATE:
             case TIME:
             case TIMESTAMP:
-                // These types might be serialized (from legacy code or special cases)
-                // Note: DATE/TIME/TIMESTAMP should use typed fields, but handle for backward compat
+                // These types now use typed proto fields and should not reach BYTES_VALUE case.
+                // However, we keep them in this list to handle any legacy serialized data
+                // during migration. After full deployment, they will always use typed fields.
                 // Attempt to deserialize
                 return true;
             default:
