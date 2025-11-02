@@ -59,6 +59,7 @@ BigDecimal value = BigDecimalWire.readBigDecimal(in);
 
 ```python
 import struct
+from decimal import Decimal
 
 def write_bigdecimal(output, value):
     if value is None:
@@ -66,14 +67,19 @@ def write_bigdecimal(output, value):
         return
     
     output.write(b'\x01')
-    # Convert to unscaled value and scale
-    # (Python's Decimal can be converted to integer * 10^-scale)
-    unscaled_str = str(value.as_tuple().digits)
+    # Convert Decimal to unscaled value and scale
+    sign, digits, exponent = value.as_tuple()
+    # Concatenate digits to form unscaled integer
+    unscaled_str = ''.join(map(str, digits))
+    if sign:  # sign is 1 for negative
+        unscaled_str = '-' + unscaled_str
     unscaled_bytes = unscaled_str.encode('utf-8')
     
     output.write(struct.pack('>i', len(unscaled_bytes)))
     output.write(unscaled_bytes)
-    output.write(struct.pack('>i', -value.as_tuple().exponent))
+    # Scale is negative of exponent
+    scale = -exponent
+    output.write(struct.pack('>i', scale))
 
 def read_bigdecimal(input):
     present = input.read(1)[0]
@@ -86,21 +92,30 @@ def read_bigdecimal(input):
     scale = struct.unpack('>i', input.read(4))[0]
     
     # Reconstruct Decimal from unscaled value and scale
-    from decimal import Decimal
     unscaled = int(unscaled_str)
+    # Create Decimal with negative exponent (scale)
     return Decimal(unscaled) / Decimal(10 ** scale)
 ```
 
 ### Go Example
 
+Note: Go's standard library doesn't have a built-in BigDecimal type, so this example uses a simplified approach with big.Int for the unscaled value and tracking scale separately. For production use, consider using a third-party decimal library like shopspring/decimal.
+
 ```go
 import (
     "encoding/binary"
+    "fmt"
     "io"
     "math/big"
 )
 
-func WriteBigDecimal(w io.Writer, value *big.Float) error {
+// BigDecimalValue represents a decimal value with unscaled integer and scale
+type BigDecimalValue struct {
+    Unscaled *big.Int
+    Scale    int32
+}
+
+func WriteBigDecimal(w io.Writer, value *BigDecimalValue) error {
     if value == nil {
         return binary.Write(w, binary.BigEndian, byte(0))
     }
@@ -109,8 +124,8 @@ func WriteBigDecimal(w io.Writer, value *big.Float) error {
         return err
     }
     
-    // Convert to unscaled value and scale
-    unscaledStr := value.Text('f', -1)
+    // Convert unscaled value to decimal string
+    unscaledStr := value.Unscaled.String()
     unscaledBytes := []byte(unscaledStr)
     
     if err := binary.Write(w, binary.BigEndian, int32(len(unscaledBytes))); err != nil {
@@ -120,11 +135,10 @@ func WriteBigDecimal(w io.Writer, value *big.Float) error {
         return err
     }
     
-    // Write scale (you'll need to track this separately in Go)
-    return binary.Write(w, binary.BigEndian, int32(scale))
+    return binary.Write(w, binary.BigEndian, value.Scale)
 }
 
-func ReadBigDecimal(r io.Reader) (*big.Float, error) {
+func ReadBigDecimal(r io.Reader) (*BigDecimalValue, error) {
     var present byte
     if err := binary.Read(r, binary.BigEndian, &present); err != nil {
         return nil, err
@@ -148,14 +162,27 @@ func ReadBigDecimal(r io.Reader) (*big.Float, error) {
         return nil, err
     }
     
-    // Reconstruct big.Float from unscaled value and scale
+    // Parse unscaled value
     unscaled := new(big.Int)
-    unscaled.SetString(string(unscaledBytes), 10)
+    if _, ok := unscaled.SetString(string(unscaledBytes), 10); !ok {
+        return nil, fmt.Errorf("invalid unscaled value: %s", string(unscaledBytes))
+    }
     
-    result := new(big.Float).SetInt(unscaled)
-    divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
-    return result.Quo(result, divisor), nil
+    return &BigDecimalValue{
+        Unscaled: unscaled,
+        Scale:    scale,
+    }, nil
 }
+
+// ToFloat64 converts BigDecimalValue to float64 (may lose precision)
+func (bd *BigDecimalValue) ToFloat64() float64 {
+    f := new(big.Float).SetInt(bd.Unscaled)
+    divisor := new(big.Float).SetInt(
+        new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(bd.Scale)), nil))
+    result, _ := new(big.Float).Quo(f, divisor).Float64()
+    return result
+}
+```
 ```
 
 ## Rationale
