@@ -193,7 +193,8 @@ public class ProtoConverter {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
 
         if (value == null) {
-            // Return empty ParameterValue for null
+            // Set explicit null marker to distinguish null from empty bytes
+            builder.setIsNull(true);
             return builder.build();
         } else if (value instanceof Boolean) {
             builder.setBoolValue((Boolean) value);
@@ -253,6 +254,9 @@ public class ProtoConverter {
         }
 
         switch (value.getValueCase()) {
+            case IS_NULL:
+                // Explicit null marker - return null
+                return null;
             case BOOL_VALUE:
                 return value.getBoolValue();
             case INT_VALUE:
@@ -267,24 +271,21 @@ public class ProtoConverter {
                 return value.getStringValue();
             case BYTES_VALUE:
                 byte[] bytes = value.getBytesValue().toByteArray();
-                if (bytes.length == 0) {
-                    return null;
+                
+                // For binary data types (BYTES, BLOB, BINARY_STREAM), preserve empty byte arrays
+                // and don't attempt deserialization
+                if (type != null && !shouldDeserializeBytes(type)) {
+                    // Binary data types - return raw bytes (including empty arrays)
+                    return bytes;
                 }
                 
-                // Determine if bytes should be deserialized based on ParameterType
-                if (type != null && !shouldDeserializeBytes(type)) {
-                    // Binary data types (BYTES, BLOB, BINARY_STREAM) - return raw bytes
+                // For non-binary types that might be serialized objects, attempt deserialization
+                try {
+                    return SerializationHandler.deserialize(bytes, Object.class);
+                } catch (RuntimeException e) {
+                    // If deserialization fails (e.g., StreamCorruptedException, EOFException),
+                    // return raw bytes
                     return bytes;
-                } else {
-                    // Try to deserialize for complex types and result set data
-                    // This handles both serialized complex types (BigDecimal, Date) and raw binary data (BLOBs)
-                    try {
-                        return SerializationHandler.deserialize(bytes, Object.class);
-                    } catch (RuntimeException e) {
-                        // If deserialization fails (e.g., StreamCorruptedException for BLOB data,
-                        // EOFException for truncated data), return raw bytes
-                        return bytes;
-                    }
                 }
             case INT_ARRAY_VALUE:
                 // Convert IntArray proto message to int[]
