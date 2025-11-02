@@ -322,8 +322,17 @@ public class ProtoConverter {
                 // This branch shouldn't be reached since value is not null, but handle defensively
                 builder.setIsNull(true);
             }
+        } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
+            // For Map, List, and Properties objects, use protobuf serialization
+            // instead of Java serialization for language independence
+            try {
+                byte[] protoBytes = org.openjproxy.grpc.transport.ProtoSerialization.serializeToTransport(value);
+                builder.setBytesValue(ByteString.copyFrom(protoBytes));
+            } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
+            }
         } else {
-            // For all other complex types (Map, Blob, Clob, etc.),
+            // For all other complex types (Blob, Clob, etc.),
             // use Java serialization to preserve exact type information.
             // Note: Date/Time/Timestamp/URL/RowId should never reach here as they are now handled
             // via typed proto fields (timestamp_value, date_value, time_value, url_value, rowid_value)
@@ -444,25 +453,29 @@ public class ProtoConverter {
                 }
                 
                 // When type is unknown, check if bytes look like Java serialization (starts with 0xAC 0xED)
-                // If not, try BigDecimalWire first
+                // vs protobuf Container message. Try protobuf first for Map/List/Properties.
                 if (type == null && bytes.length > 0) {
                     boolean looksLikeJavaSerialization = bytes.length >= 2 && 
                         (bytes[0] & 0xFF) == 0xAC && (bytes[1] & 0xFF) == 0xED;
                     
                     if (!looksLikeJavaSerialization) {
-                        // Try BigDecimalWire first for non-Java-serialized bytes
+                        // Try protobuf Container first (for Map/List/Properties)
                         try {
-                            ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-                            DataInputStream dis = new DataInputStream(bais);
-                            BigDecimal result = BigDecimalWire.readBigDecimal(dis);
-                            // Only return if we got a non-null result
-                            // Null could mean the first byte was 0, which might be coincidental
-                            if (result != null) {
-                                return result;
+                            return org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
+                        } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                            // Not a protobuf Container, try BigDecimalWire
+                            try {
+                                ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+                                DataInputStream dis = new DataInputStream(bais);
+                                BigDecimal result = BigDecimalWire.readBigDecimal(dis);
+                                // Only return if we got a non-null result
+                                if (result != null) {
+                                    return result;
+                                }
+                                // If null, continue to try Java serialization
+                            } catch (IOException ex) {
+                                // Not a BigDecimal either, will try Java serialization next
                             }
-                            // If null, continue to try Java serialization
-                        } catch (IOException e) {
-                            // Not a BigDecimal, will try Java serialization next
                         }
                     }
                 }
@@ -681,6 +694,14 @@ public class ProtoConverter {
                 } catch (IOException e) {
                     throw new RuntimeException("Failed to serialize BigDecimal", e);
                 }
+            } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
+                // For Map, List, and Properties objects, use protobuf serialization
+                try {
+                    byte[] protoBytes = org.openjproxy.grpc.transport.ProtoSerialization.serializeToTransport(value);
+                    builder.setBytesValue(ByteString.copyFrom(protoBytes));
+                } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                    throw new RuntimeException("Failed to serialize Map/List/Properties to protobuf", e);
+                }
             } else {
                 // For complex objects, serialize as bytes
                 builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
@@ -726,10 +747,16 @@ public class ProtoConverter {
                     // Try to deserialize as Object first
                     byte[] bytes = entry.getBytesValue().toByteArray();
                     try {
-                        value = SerializationHandler.deserialize(bytes, Object.class);
-                    } catch (Exception e) {
-                        // If deserialization fails, keep as byte array
-                        value = bytes;
+                        // Try protobuf deserialization first for Map/List/Properties
+                        value = org.openjproxy.grpc.transport.ProtoSerialization.deserializeFromTransport(bytes);
+                    } catch (org.openjproxy.grpc.transport.ProtoSerialization.SerializationException e) {
+                        // Not a protobuf message, try Java serialization
+                        try {
+                            value = SerializationHandler.deserialize(bytes, Object.class);
+                        } catch (Exception ex) {
+                            // If deserialization fails, keep as byte array
+                            value = bytes;
+                        }
                     }
                     break;
                 case VALUE_NOT_SET:

@@ -1,7 +1,6 @@
 package org.openjproxy.jdbc;
 
 import org.junit.jupiter.api.Test;
-import org.openjproxy.grpc.SerializationHandler;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
