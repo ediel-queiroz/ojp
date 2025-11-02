@@ -218,7 +218,6 @@ The implementation includes safeguards:
 Since this affects the driver-server protocol:
 1. Deploy updated server and driver together in a coordinated release
 2. No backward compatibility with pre-0.2.1 versions for BigDecimal data
-3. The implementation includes a fallback in deserialization that attempts Java serialization if BigDecimalWire format fails, providing limited backward compatibility
 
 ### Version Detection
 

@@ -294,19 +294,14 @@ public class ProtoConverter {
                     return bytes;
                 }
                 
-                // Try BigDecimalWire deserialization first for BIG_DECIMAL type
+                // Use BigDecimalWire deserialization for BIG_DECIMAL type
                 if (type == ParameterType.BIG_DECIMAL) {
                     try {
                         ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
                         DataInputStream dis = new DataInputStream(bais);
                         return BigDecimalWire.readBigDecimal(dis);
                     } catch (IOException e) {
-                        // If BigDecimalWire fails, fall back to Java serialization for backward compatibility
-                        try {
-                            return SerializationHandler.deserialize(bytes, Object.class);
-                        } catch (RuntimeException ex) {
-                            throw new RuntimeException("Failed to deserialize BigDecimal", ex);
-                        }
+                        throw new RuntimeException("Failed to deserialize BigDecimal", e);
                     }
                 }
                 
