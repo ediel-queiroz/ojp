@@ -183,7 +183,6 @@ func (bd *BigDecimalValue) ToFloat64() float64 {
     return result
 }
 ```
-```
 
 ## Rationale
 
