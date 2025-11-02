@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
 import java.sql.RowIdLifetime;
+import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.UUID;
 
@@ -56,10 +57,33 @@ public class ProtoConverterNewTypesTest {
         // Calendar is converted to TimestampWithZone
         assertEquals(ParameterValue.ValueCase.TIMESTAMP_VALUE, value.getValueCase());
         
-        // Result should be a Timestamp (Calendar is converted to Timestamp)
+        // Result should now be a Calendar (with original_type preservation)
+        Object result = ProtoConverter.fromParameterValue(value, null);
+        assertNotNull(result);
+        assertTrue(result instanceof java.util.Calendar);
+        
+        // Verify times are equivalent (allowing for millisecond precision)
+        Calendar resultCal = (Calendar) result;
+        assertEquals(original.getTimeInMillis(), resultCal.getTimeInMillis());
+        assertEquals(original.getTimeZone(), resultCal.getTimeZone());
+    }
+    
+    @Test
+    public void testTimestampRoundTrip() {
+        // Test that regular Timestamp still returns Timestamp (not Calendar)
+        java.sql.Timestamp original = new java.sql.Timestamp(System.currentTimeMillis());
+        ParameterValue value = ProtoConverter.toParameterValue(original, java.time.ZoneId.systemDefault());
+        assertNotNull(value);
+        assertEquals(ParameterValue.ValueCase.TIMESTAMP_VALUE, value.getValueCase());
+        
+        // Result should be a Timestamp
         Object result = ProtoConverter.fromParameterValue(value, null);
         assertNotNull(result);
         assertTrue(result instanceof java.sql.Timestamp);
+        
+        // Verify times are equivalent
+        java.sql.Timestamp resultTs = (java.sql.Timestamp) result;
+        assertEquals(original.getTime(), resultTs.getTime());
     }
 
     @Test

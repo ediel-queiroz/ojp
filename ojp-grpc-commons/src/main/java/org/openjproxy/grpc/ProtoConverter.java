@@ -357,11 +357,8 @@ public class ProtoConverter {
             builder.setStringArrayValue(stringArrayBuilder.build());
         } else if (value instanceof Calendar) {
             // java.util.Calendar or GregorianCalendar - convert to TimestampWithZone
-            // Extract timestamp and timezone from Calendar
-            Calendar cal = (Calendar) value;
-            Timestamp timestamp = new Timestamp(cal.getTimeInMillis());
-            java.time.ZoneId zoneId = cal.getTimeZone().toZoneId();
-            return toParameterValue(timestamp, zoneId);
+            // Use calendarToTimestampWithZone to preserve original type as CALENDAR
+            builder.setTimestampValue(TemporalConverter.calendarToTimestampWithZone((Calendar) value));
         } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
             // For Map, List, and Properties objects, use protobuf serialization
             // instead of Java serialization for language independence
@@ -532,9 +529,9 @@ public class ProtoConverter {
                 }
                 return longArr;
             case TIMESTAMP_VALUE:
-                // Convert TimestampWithZone proto message to java.sql.Timestamp
-                // The server enforces timezone presence, so this should never fail on missing timezone
-                return TemporalConverter.fromTimestampWithZone(value.getTimestampValue());
+                // Convert TimestampWithZone proto message to appropriate Java type
+                // Returns java.sql.Timestamp or java.util.Calendar based on original_type
+                return TemporalConverter.fromTimestampWithZoneToObject(value.getTimestampValue());
             case DATE_VALUE:
                 // Convert google.type.Date proto message to java.sql.Date
                 return TemporalConverter.fromProtoDate(value.getDateValue());
