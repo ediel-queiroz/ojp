@@ -2,6 +2,10 @@ syntax = "proto3";
 option java_multiple_files = true;
 package com.openjproxy.grpc;
 
+import "google/protobuf/timestamp.proto";
+import "google/type/date.proto";
+import "google/type/timeofday.proto";
+
 message ConnectionDetails {
     string url = 1;
     string user = 2;
@@ -44,6 +48,12 @@ enum ParameterTypeProto {
     PT_SQL_XML = 28;
 }
 
+// Wrapper message for timestamp with timezone information
+message TimestampWithZone {
+    google.protobuf.Timestamp instant = 1;  // Absolute instant (seconds + nanos since epoch)
+    string timezone = 2;  // IANA ZoneId string (e.g., "Europe/Rome") or offset (e.g., "+02:00")
+}
+
 // Message representing a single value in a parameter
 message ParameterValue {
     oneof value {
@@ -57,6 +67,9 @@ message ParameterValue {
         IntArray int_array_value = 8;
         LongArray long_array_value = 9;
         bool is_null = 10;  // Explicit null marker to distinguish null from empty bytes
+        TimestampWithZone timestamp_value = 11;  // Timestamp with timezone
+        google.type.Date date_value = 12;  // Date-only value (year, month, day)
+        google.type.TimeOfDay time_value = 13;  // Time-only value (hours, minutes, seconds, nanos)
     }
 }
 
