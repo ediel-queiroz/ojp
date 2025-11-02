@@ -9,6 +9,7 @@ import com.openjproxy.grpc.ParameterTypeProto;
 import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.PropertyEntry;
 import com.openjproxy.grpc.ResultRow;
+import com.openjproxy.grpc.TimestampWithZone;
 import org.openjproxy.grpc.dto.OpQueryResult;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
@@ -34,6 +35,7 @@ public class ProtoConverter {
 
     /**
      * Convert a Parameter DTO to ParameterProto message.
+     * Handles temporal types (DATE, TIME, TIMESTAMP) with special conversion logic.
      */
     public static ParameterProto toProto(Parameter parameter) {
         if (parameter == null) {
@@ -45,8 +47,41 @@ public class ProtoConverter {
                 .setType(toProto(parameter.getType()));
 
         if (parameter.getValues() != null) {
-            for (Object value : parameter.getValues()) {
-                builder.addValues(toParameterValue(value));
+            // Special handling for temporal types
+            if (parameter.getType() == ParameterType.TIMESTAMP && !parameter.getValues().isEmpty()) {
+                // TIMESTAMP: first value is Timestamp, optional second value is Calendar
+                Object firstValue = parameter.getValues().get(0);
+                if (firstValue != null && firstValue instanceof Timestamp) {
+                    Timestamp timestamp = (Timestamp) firstValue;
+                    java.time.ZoneId zoneId = null;
+                    
+                    // Check if Calendar was provided (for timezone)
+                    if (parameter.getValues().size() > 1 && parameter.getValues().get(1) instanceof java.util.Calendar) {
+                        java.util.Calendar cal = (java.util.Calendar) parameter.getValues().get(1);
+                        zoneId = cal.getTimeZone().toZoneId();
+                    } else {
+                        // Use system default timezone as per requirements
+                        zoneId = java.time.ZoneId.systemDefault();
+                    }
+                    
+                    // Convert to TimestampWithZone and add as ParameterValue
+                    builder.addValues(toParameterValue(timestamp, zoneId));
+                } else if (firstValue == null) {
+                    builder.addValues(toParameterValue(null));
+                }
+            } else if (parameter.getType() == ParameterType.DATE && !parameter.getValues().isEmpty()) {
+                // DATE: convert using typed proto field
+                Object firstValue = parameter.getValues().get(0);
+                builder.addValues(toParameterValueDate(firstValue));
+            } else if (parameter.getType() == ParameterType.TIME && !parameter.getValues().isEmpty()) {
+                // TIME: convert using typed proto field
+                Object firstValue = parameter.getValues().get(0);
+                builder.addValues(toParameterValueTime(firstValue));
+            } else {
+                // For all other types, use standard conversion
+                for (Object value : parameter.getValues()) {
+                    builder.addValues(toParameterValue(value));
+                }
             }
         }
 
@@ -191,7 +226,9 @@ public class ProtoConverter {
 
     /**
      * Convert a Java object to ParameterValue.
-     * Uses BigDecimalWire for BigDecimal, Java serialization for other complex types.
+     * For temporal types (Date, Time, Timestamp), this method should not be called directly
+     * as they need special handling. Use toParameterValueDate, toParameterValueTime, or
+     * toParameterValue(Timestamp, ZoneId) instead.
      */
     public static ParameterValue toParameterValue(Object value) {
         ParameterValue.Builder builder = ParameterValue.newBuilder();
@@ -247,13 +284,92 @@ public class ProtoConverter {
             } catch (IOException e) {
                 throw new RuntimeException("Failed to serialize BigDecimal", e);
             }
+        } else if (value instanceof Date) {
+            // java.sql.Date - should use toParameterValueDate, but handle here for safety
+            throw new IllegalArgumentException(
+                "java.sql.Date must be converted using toParameterValueDate, not toParameterValue. " +
+                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
+            );
+        } else if (value instanceof Time) {
+            // java.sql.Time - should use toParameterValueTime, but handle here for safety
+            throw new IllegalArgumentException(
+                "java.sql.Time must be converted using toParameterValueTime, not toParameterValue. " +
+                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
+            );
+        } else if (value instanceof Timestamp) {
+            // java.sql.Timestamp - should use toParameterValue(Timestamp, ZoneId), but handle here for safety
+            throw new IllegalArgumentException(
+                "java.sql.Timestamp must be converted with ZoneId using toParameterValue(Timestamp, ZoneId), not toParameterValue(Object). " +
+                "This is an internal error - check ProtoConverter.toProto(Parameter) implementation."
+            );
         } else {
-            // For all other complex types (Date, Time, Timestamp, UUID, Map, etc.),
+            // For all other complex types (UUID, Map, Blob, Clob, etc.),
             // use Java serialization to preserve exact type information.
+            // Note: Date/Time/Timestamp should never reach here due to checks above
             builder.setBytesValue(ByteString.copyFrom(SerializationHandler.serialize(value)));
         }
 
         return builder.build();
+    }
+    
+    /**
+     * Convert java.sql.Timestamp with ZoneId to ParameterValue with TimestampWithZone.
+     * 
+     * @param timestamp The timestamp to convert (can be null)
+     * @param zoneId The timezone (must not be null if timestamp is not null)
+     * @return ParameterValue with timestamp_value set, or is_null if timestamp is null
+     */
+    public static ParameterValue toParameterValue(Timestamp timestamp, java.time.ZoneId zoneId) {
+        if (timestamp == null) {
+            return ParameterValue.newBuilder().setIsNull(true).build();
+        }
+        
+        TimestampWithZone timestampWithZone = TemporalConverter.toTimestampWithZone(timestamp, zoneId);
+        return ParameterValue.newBuilder()
+            .setTimestampValue(timestampWithZone)
+            .build();
+    }
+    
+    /**
+     * Convert java.sql.Date to ParameterValue with google.type.Date.
+     * 
+     * @param date The date to convert (can be null or Object that will be cast)
+     * @return ParameterValue with date_value set, or is_null if date is null
+     */
+    public static ParameterValue toParameterValueDate(Object date) {
+        if (date == null) {
+            return ParameterValue.newBuilder().setIsNull(true).build();
+        }
+        
+        if (!(date instanceof Date)) {
+            throw new IllegalArgumentException("Expected java.sql.Date but got " + date.getClass().getName());
+        }
+        
+        com.google.type.Date protoDate = TemporalConverter.toProtoDate((Date) date);
+        return ParameterValue.newBuilder()
+            .setDateValue(protoDate)
+            .build();
+    }
+    
+    /**
+     * Convert java.sql.Time to ParameterValue with google.type.TimeOfDay.
+     * 
+     * @param time The time to convert (can be null or Object that will be cast)
+     * @return ParameterValue with time_value set, or is_null if time is null
+     */
+    public static ParameterValue toParameterValueTime(Object time) {
+        if (time == null) {
+            return ParameterValue.newBuilder().setIsNull(true).build();
+        }
+        
+        if (!(time instanceof Time)) {
+            throw new IllegalArgumentException("Expected java.sql.Time but got " + time.getClass().getName());
+        }
+        
+        com.google.type.TimeOfDay protoTimeOfDay = TemporalConverter.toProtoTimeOfDay((Time) time);
+        return ParameterValue.newBuilder()
+            .setTimeValue(protoTimeOfDay)
+            .build();
     }
 
     /**
@@ -353,6 +469,16 @@ public class ProtoConverter {
                     longArr[i] = longArray.getValues(i);
                 }
                 return longArr;
+            case TIMESTAMP_VALUE:
+                // Convert TimestampWithZone proto message to java.sql.Timestamp
+                // The server enforces timezone presence, so this should never fail on missing timezone
+                return TemporalConverter.fromTimestampWithZone(value.getTimestampValue());
+            case DATE_VALUE:
+                // Convert google.type.Date proto message to java.sql.Date
+                return TemporalConverter.fromProtoDate(value.getDateValue());
+            case TIME_VALUE:
+                // Convert google.type.TimeOfDay proto message to java.sql.Time
+                return TemporalConverter.fromProtoTimeOfDay(value.getTimeValue());
             case VALUE_NOT_SET:
             default:
                 return null;
@@ -364,6 +490,7 @@ public class ProtoConverter {
      * Only deserialize for OBJECT and complex types that were serialized.
      * For binary data types (BYTES, BINARY_STREAM), return raw bytes.
      * Note: BLOB, CLOB, etc. are serialized Java objects and should be deserialized.
+     * Note: DATE, TIME, TIMESTAMP should now use typed proto fields and never reach BYTES_VALUE case.
      */
     private static boolean shouldDeserializeBytes(ParameterType type) {
         // If no type information, try to deserialize (for CallResourceResponse compatibility)
@@ -389,9 +516,6 @@ public class ProtoConverter {
             case REF:
             case SQL_XML:
             case BIG_DECIMAL:
-            case DATE:
-            case TIME:
-            case TIMESTAMP:
             case URL:
             case ROW_ID:
             case BOOLEAN:
@@ -402,7 +526,11 @@ public class ProtoConverter {
             case FLOAT:
             case DOUBLE:
             case STRING:
+            case DATE:
+            case TIME:
+            case TIMESTAMP:
                 // These types might be serialized (from legacy code or special cases)
+                // Note: DATE/TIME/TIMESTAMP should use typed fields, but handle for backward compat
                 // Attempt to deserialize
                 return true;
             default:
