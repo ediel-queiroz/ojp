@@ -316,7 +316,13 @@ public class ProtoConverter {
                         try {
                             ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
                             DataInputStream dis = new DataInputStream(bais);
-                            return BigDecimalWire.readBigDecimal(dis);
+                            BigDecimal result = BigDecimalWire.readBigDecimal(dis);
+                            // Only return if we got a non-null result
+                            // Null could mean the first byte was 0, which might be coincidental
+                            if (result != null) {
+                                return result;
+                            }
+                            // If null, continue to try Java serialization
                         } catch (IOException e) {
                             // Not a BigDecimal, will try Java serialization next
                         }
