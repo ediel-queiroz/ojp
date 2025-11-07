@@ -109,8 +109,26 @@ public class MultinodeConnectionManager {
         // Try to connect to all servers
         for (ServerEndpoint server : serverEndpoints) {
             if (!server.isHealthy()) {
-                log.debug("Skipping unhealthy server: {}", server.getAddress());
-                continue;
+                // Attempt to recover unhealthy servers if enough time has passed
+                long currentTime = System.currentTimeMillis();
+                if ((currentTime - server.getLastFailureTime()) > retryDelayMs) {
+                    log.info("Attempting to recover unhealthy server {} during connect()", server.getAddress());
+                    try {
+                        createChannelAndStub(server);
+                        server.setHealthy(true);
+                        server.setLastFailureTime(0);
+                        log.info("Successfully recovered server {} during connect()", server.getAddress());
+                        // Continue to attempt connection below
+                    } catch (Exception e) {
+                        server.setLastFailureTime(currentTime);
+                        log.debug("Server {} recovery attempt failed during connect(): {}", 
+                                server.getAddress(), e.getMessage());
+                        continue;  // Skip this server
+                    }
+                } else {
+                    log.debug("Skipping unhealthy server: {} (waiting for retry delay)", server.getAddress());
+                    continue;
+                }
             }
             
             try {
@@ -252,13 +270,14 @@ public class MultinodeConnectionManager {
                 .filter(ServerEndpoint::isHealthy)
                 .collect(Collectors.toList());
         
-        if (healthyServers.isEmpty()) {
-            // No healthy servers, try to recover some servers
-            attemptServerRecovery();
-            healthyServers = serverEndpoints.stream()
-                    .filter(ServerEndpoint::isHealthy)
-                    .collect(Collectors.toList());
-        }
+        // Always attempt to recover unhealthy servers if retry delay has passed
+        // This ensures we try to bring back downed servers even when others are healthy
+        attemptServerRecovery();
+        
+        // Re-check healthy servers after recovery attempt
+        healthyServers = serverEndpoints.stream()
+                .filter(ServerEndpoint::isHealthy)
+                .collect(Collectors.toList());
         
         if (healthyServers.isEmpty()) {
             log.error("No healthy servers available");

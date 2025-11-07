@@ -525,3 +525,100 @@ This is where connHash was previously used as a fallback, but that has been remo
 - **Trigger**: Operations without session, or new connections
 - **Method**: `selectHealthyServer()` uses `AtomicInteger` counter
 - **Health**: Only selects from healthy servers (automatically skips failed servers)
+
+---
+
+## Server Health and Recovery
+
+### Health Tracking
+
+Each `ServerEndpoint` maintains health status:
+- **`healthy`**: Boolean flag indicating if server is available
+- **`lastFailureTime`**: Timestamp of last connection failure
+
+### When Servers Are Marked Unhealthy
+
+A server is marked unhealthy only for **connection-level errors**:
+- `UNAVAILABLE`: Server not reachable
+- `DEADLINE_EXCEEDED`: Request timeout
+- `CANCELLED`: Connection cancelled
+- `UNKNOWN`: Connection-related errors
+
+**Database-level errors do NOT mark servers unhealthy:**
+- Table not found
+- Syntax errors
+- Constraint violations
+- Other SQL errors
+
+### Automatic Recovery
+
+The system continuously attempts to recover unhealthy servers:
+
+**1. During `connect()` operations:**
+```java
+// If server is unhealthy but retry delay has passed
+if (!server.isHealthy() && (currentTime - server.getLastFailureTime()) > retryDelayMs) {
+    // Attempt to create new channel and mark healthy
+    try {
+        createChannelAndStub(server);
+        server.setHealthy(true);
+        server.setLastFailureTime(0);
+        log.info("Successfully recovered server during connect()");
+    } catch (Exception e) {
+        server.setLastFailureTime(currentTime);
+        // Skip this server for now
+    }
+}
+```
+
+**2. During server selection (`selectHealthyServer()`):**
+```java
+// Always attempt recovery on every selection
+attemptServerRecovery();
+
+// Then select from healthy servers
+List<ServerEndpoint> healthyServers = serverEndpoints.stream()
+    .filter(ServerEndpoint::isHealthy)
+    .collect(Collectors.toList());
+```
+
+### Recovery Behavior
+
+**Retry Delay:**
+- Default: 5 seconds (`DEFAULT_MULTINODE_RETRY_DELAY_MS`)
+- Configurable via `MultinodeConnectionManager` constructor
+
+**Recovery Triggers:**
+1. **Every `connect()` call**: Attempts to recover unhealthy servers if retry delay has passed
+2. **Every server selection**: Checks all unhealthy servers and attempts recovery
+3. **Continuous**: Recovery happens even when other servers are healthy
+
+**Example Scenario:**
+
+1. Initial state: 2 servers, both healthy
+2. Server 1 goes down → marked unhealthy
+3. System continues using Server 2
+4. After 5 seconds (retry delay):
+   - Next `connect()` or operation attempts to recover Server 1
+   - If Server 1 is back online → marked healthy and added back to rotation
+   - If Server 1 still down → retry delay resets, will try again in 5 seconds
+
+**Key Benefits:**
+- No manual intervention needed
+- Automatic recovery when downed servers come back online
+- Configurable retry delay to avoid hammering downed servers
+- Works even when other servers are healthy (not just when ALL servers are down)
+
+### Configuration
+
+```java
+// Default configuration (5 second retry delay)
+MultinodeConnectionManager manager = new MultinodeConnectionManager(serverEndpoints);
+
+// Custom retry configuration
+MultinodeConnectionManager manager = new MultinodeConnectionManager(
+    serverEndpoints,
+    -1,      // retryAttempts: -1 = retry indefinitely
+    10000    // retryDelayMs: 10 seconds
+);
+```

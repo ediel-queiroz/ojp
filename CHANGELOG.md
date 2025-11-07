@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Fixed server recovery in multinode setup to work continuously, not just when all servers are down**
+  - Previously, unhealthy servers were only recovered when ALL servers were down
+  - Now, recovery attempts happen during every `connect()` and server selection operation
+  - Unhealthy servers are retried after the configured retry delay (default: 5 seconds)
+  - This ensures that if one server goes down in a multi-server setup, it will automatically recover when brought back online
+  - Addresses issue where "Connected to 1 out of 2 servers" message persisted even after bringing downed server back up
+
 ### Removed - API Cleanup (Follow-up to PR #93)
 - **Removed deprecated and unused server selection APIs from MultinodeConnectionManager**
   - Removed `selectServer()`: Unused public method, functionality now handled internally by `affinityServer()`
