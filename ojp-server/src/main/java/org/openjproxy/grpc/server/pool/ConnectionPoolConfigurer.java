@@ -100,6 +100,38 @@ public class ConnectionPoolConfigurer {
     public static MultinodePoolCoordinator getPoolCoordinator() {
         return poolCoordinator;
     }
+    
+    /**
+     * Processes cluster health from client and triggers pool rebalancing if health has changed.
+     * This should be called on each request that includes cluster health information.
+     * 
+     * @param connHash Connection hash
+     * @param clusterHealth Cluster health string from client
+     * @param clusterHealthTracker Tracker to detect health changes
+     */
+    public static void processClusterHealth(String connHash, String clusterHealth, 
+                                           org.openjproxy.grpc.server.ClusterHealthTracker clusterHealthTracker) {
+        if (connHash == null || connHash.isEmpty() || clusterHealth == null || clusterHealth.isEmpty()) {
+            return;
+        }
+        
+        // Check if cluster health has changed
+        boolean healthChanged = clusterHealthTracker.hasHealthChanged(connHash, clusterHealth);
+        
+        if (healthChanged) {
+            // Count healthy servers
+            int healthyServerCount = clusterHealthTracker.countHealthyServers(clusterHealth);
+            
+            log.info("Cluster health changed for {}, healthy servers: {}, triggering pool rebalancing", 
+                    connHash, healthyServerCount);
+            
+            // Update the pool coordinator with new healthy server count
+            poolCoordinator.updateHealthyServers(connHash, healthyServerCount);
+            
+            // Note: Actual pool resizing would happen in ConnectionAcquisitionManager
+            // when it detects the new pool allocation settings
+        }
+    }
 
     /**
      * Extracts client properties from connection details.

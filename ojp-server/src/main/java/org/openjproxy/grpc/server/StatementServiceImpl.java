@@ -122,6 +122,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     // Multinode XA coordinator for distributing transaction limits
     private static final MultinodeXaCoordinator xaCoordinator = new MultinodeXaCoordinator();
     
+    // Cluster health tracker for monitoring health changes
+    private final ClusterHealthTracker clusterHealthTracker = new ClusterHealthTracker();
+    
     private static final List<String> INPUT_STREAM_TYPES = Arrays.asList("RAW", "BINARY VARYING", "BYTEA");
     private final Map<String, DbName> dbNameMap = new ConcurrentHashMap<>();
 
@@ -145,6 +148,25 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         
         // Return empty string if client didn't send targetServer
         return "";
+    }
+    
+    /**
+     * Processes cluster health from the client request and triggers pool rebalancing if needed.
+     * This should be called for every request that includes SessionInfo with cluster health.
+     */
+    private void processClusterHealth(SessionInfo sessionInfo) {
+        if (sessionInfo == null) {
+            return;
+        }
+        
+        String clusterHealth = sessionInfo.getClusterHealth();
+        String connHash = sessionInfo.getConnHash();
+        
+        if (clusterHealth != null && !clusterHealth.isEmpty() && 
+            connHash != null && !connHash.isEmpty()) {
+            
+            ConnectionPoolConfigurer.processClusterHealth(connHash, clusterHealth, clusterHealthTracker);
+        }
     }
 
     @Override
@@ -367,6 +389,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         log.info("Executing update {}", request.getSql());
         String stmtHash = SqlStatementXXHash.hashSqlQuery(request.getSql());
         
+        // Process cluster health from the request
+        processClusterHealth(request.getSession());
+        
         try {
             circuitBreaker.preCheck(stmtHash);
             
@@ -497,6 +522,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         log.info("Executing query for {}", request.getSql());
         String stmtHash = SqlStatementXXHash.hashSqlQuery(request.getSql());
         
+        // Process cluster health from the request
+        processClusterHealth(request.getSession());
+        
         try {
             circuitBreaker.preCheck(stmtHash);
             
@@ -550,6 +578,10 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     @Override
     public void fetchNextRows(ResultSetFetchRequest request, StreamObserver<OpResult> responseObserver) {
         log.debug("Executing fetch next rows for result set  {}", request.getResultSetUUID());
+        
+        // Process cluster health from the request
+        processClusterHealth(request.getSession());
+        
         try {
             ConnectionSessionDTO dto = this.sessionConnection(request.getSession(), false);
             this.handleResultSet(dto.getSession(), request.getResultSetUUID(), responseObserver);
@@ -972,6 +1004,10 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     @Override
     public void startTransaction(SessionInfo sessionInfo, StreamObserver<SessionInfo> responseObserver) {
         log.info("Starting transaction");
+        
+        // Process cluster health from the request
+        processClusterHealth(sessionInfo);
+        
         try {
             SessionInfo activeSessionInfo = sessionInfo;
 
@@ -1007,6 +1043,10 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     @Override
     public void commitTransaction(SessionInfo sessionInfo, StreamObserver<SessionInfo> responseObserver) {
         log.info("Commiting transaction");
+        
+        // Process cluster health from the request
+        processClusterHealth(sessionInfo);
+        
         try {
             Connection conn = sessionManager.getConnection(sessionInfo);
             conn.commit();
@@ -1032,6 +1072,10 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     @Override
     public void rollbackTransaction(SessionInfo sessionInfo, StreamObserver<SessionInfo> responseObserver) {
         log.info("Rollback transaction");
+        
+        // Process cluster health from the request
+        processClusterHealth(sessionInfo);
+        
         try {
             Connection conn = sessionManager.getConnection(sessionInfo);
             conn.rollback();
@@ -1056,6 +1100,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
     @Override
     public void callResource(CallResourceRequest request, StreamObserver<CallResourceResponse> responseObserver) {
+        // Process cluster health from the request
+        processClusterHealth(request.getSession());
+        
         try {
             if (!request.hasSession()) {
                 throw new SQLException("No active session.");

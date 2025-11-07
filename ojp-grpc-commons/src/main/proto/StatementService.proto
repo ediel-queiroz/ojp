@@ -186,6 +186,7 @@ message SessionInfo {
     SessionStatus sessionStatus = 5;
     bool isXA = 6;  // Flag indicating this is an XA session
     string targetServer = 7;  // Server endpoint (host:port) for session stickiness binding
+    string clusterHealth = 8;  // Cluster health status: "host1:port1(UP);host2:port2(DOWN);..."
 }
 
 enum ResultType {

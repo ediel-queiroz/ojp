@@ -517,6 +517,18 @@ public class MultinodeConnectionManager {
     }
     
     /**
+     * Generates the cluster health status string.
+     * Format: "host1:port1(UP);host2:port2(DOWN);host3:port3(UP)"
+     * 
+     * @return Cluster health status string
+     */
+    public String generateClusterHealth() {
+        return serverEndpoints.stream()
+                .map(endpoint -> endpoint.getAddress() + "(" + (endpoint.isHealthy() ? "UP" : "DOWN") + ")")
+                .collect(Collectors.joining(";"));
+    }
+    
+    /**
      * Shuts down all connections.
      */
     public void shutdown() {
