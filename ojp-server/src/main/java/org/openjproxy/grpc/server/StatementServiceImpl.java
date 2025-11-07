@@ -119,6 +119,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     // Server configuration for creating segregation managers
     private final ServerConfiguration serverConfiguration;
     
+    // Multinode XA coordinator for distributing transaction limits
+    private static final MultinodeXaCoordinator xaCoordinator = new MultinodeXaCoordinator();
+    
     private static final List<String> INPUT_STREAM_TYPES = Arrays.asList("RAW", "BINARY VARYING", "BYTEA");
     private final Map<String, DbName> dbNameMap = new ConcurrentHashMap<>();
 
@@ -126,6 +129,22 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
     static {
         DriverUtils.registerDrivers();
+    }
+
+    /**
+     * Gets the target server identifier from the incoming request.
+     * Simply echoes back what the client sent without any override.
+     */
+    private String getTargetServer(SessionInfo incomingSessionInfo) {
+        // Echo back the targetServer from incoming request, or return empty string if not present
+        if (incomingSessionInfo != null && 
+            incomingSessionInfo.getTargetServer() != null && 
+            !incomingSessionInfo.getTargetServer().isEmpty()) {
+            return incomingSessionInfo.getTargetServer();
+        }
+        
+        // Return empty string if client didn't send targetServer
+        return "";
     }
 
     @Override
@@ -177,9 +196,24 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
         // Check if this is an XA connection request
         if (connectionDetails.getIsXA()) {
+            // Check if multinode configuration is present for XA coordination
+            List<String> serverEndpoints = connectionDetails.getServerEndpointsList();
+            int actualMaxXaTransactions = maxXaTransactions;
+            
+            if (serverEndpoints != null && !serverEndpoints.isEmpty()) {
+                // Multinode: calculate divided XA transaction limits
+                MultinodeXaCoordinator.XaAllocation xaAllocation = 
+                        xaCoordinator.calculateXaLimits(connHash, maxXaTransactions, serverEndpoints);
+                
+                actualMaxXaTransactions = xaAllocation.getCurrentMaxTransactions();
+                
+                log.info("Multinode XA coordination enabled for {}: {} servers, divided max transactions: {}", 
+                        connHash, serverEndpoints.size(), actualMaxXaTransactions);
+            }
+            
             // Initialize or retrieve XA transaction limiter for this connection
             XaTransactionLimiter xaLimiter = ((SessionManagerImpl) sessionManager)
-                    .getOrCreateXaLimiter(connHash, maxXaTransactions, xaStartTimeoutMillis);
+                    .getOrCreateXaLimiter(connHash, actualMaxXaTransactions, xaStartTimeoutMillis);
             log.info("XA limiter for connHash {}: max={}, active={}/{}", 
                     connHash, xaLimiter.getMaxTransactions(), 
                     xaLimiter.getActiveTransactions(), xaLimiter.getMaxTransactions());
@@ -195,8 +229,8 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                     this.xaDataSourceMap.put(connHash, xaDataSource);
                     
                     // Create slow query segregation manager for XA datasource
-                    // Use maxXaTransactions as the pool size for XA operations
-                    createSlowQuerySegregationManagerForDatasource(connHash, maxXaTransactions);
+                    // Use actualMaxXaTransactions as the pool size for XA operations
+                    createSlowQuerySegregationManagerForDatasource(connHash, actualMaxXaTransactions);
                     
                     log.info("Created new native XADataSource for XA pass-through with connHash: {}", connHash);
                     
@@ -219,6 +253,8 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                 // Create session with XA support using sessionManager
                 SessionInfo sessionInfo = this.sessionManager.createXASession(
                         connectionDetails.getClientUUID(), connection, xaConnection);
+                
+                // Server does not populate targetServer - client will set it on future requests
                 
                 log.info("Created XA session with UUID: {} for client: {}", 
                         sessionInfo.getSessionUUID(), connectionDetails.getClientUUID());
@@ -246,7 +282,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
                 // Configure HikariCP using datasource-specific configuration
                 DataSourceConfigurationManager.DataSourceConfiguration dsConfig = 
-                        ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
+                        ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails, connHash);
 
                 ds = new HikariDataSource(config);
                 this.datasourceMap.put(connHash, ds);
@@ -268,6 +304,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         this.sessionManager.registerClientUUID(connHash, connectionDetails.getClientUUID());
 
         // For regular connections, just return session info without creating a session yet (lazy allocation)
+        // Server does not populate targetServer - client will set it on future requests
         SessionInfo sessionInfo = SessionInfo.newBuilder()
                 .setConnHash(connHash)
                 .setClientUUID(connectionDetails.getClientUUID())
@@ -942,6 +979,8 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             if (StringUtils.isEmpty(sessionInfo.getSessionUUID())) {
                 Connection conn = this.datasourceMap.get(sessionInfo.getConnHash()).getConnection();
                 activeSessionInfo = sessionManager.createSession(sessionInfo.getClientUUID(), conn);
+                // Preserve targetServer from incoming request
+                activeSessionInfo = SessionInfoUtils.withTargetServer(activeSessionInfo, getTargetServer(sessionInfo));
             }
             Connection sessionConnection = sessionManager.getConnection(activeSessionInfo);
             //Start a transaction
@@ -954,6 +993,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
             SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(activeSessionInfo);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
+            // Server echoes back targetServer from incoming request (preserved by newBuilderFrom)
 
             responseObserver.onNext(sessionInfoBuilder.build());
             responseObserver.onCompleted();
@@ -978,6 +1018,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
             SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
+            // Server echoes back targetServer from incoming request (preserved by newBuilderFrom)
 
             responseObserver.onNext(sessionInfoBuilder.build());
             responseObserver.onCompleted();
@@ -1002,6 +1043,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
             SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
+            // Server echoes back targetServer from incoming request (preserved by newBuilderFrom)
 
             responseObserver.onNext(sessionInfoBuilder.build());
             responseObserver.onCompleted();

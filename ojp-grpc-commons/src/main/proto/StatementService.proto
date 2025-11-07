@@ -14,6 +14,7 @@ message ConnectionDetails {
     string clientUUID = 4;
     repeated PropertyEntry properties = 6;
     bool isXA = 7;  // Flag to indicate XA connection
+    repeated string serverEndpoints = 8;  // List of server endpoints in the cluster for coordination
 }
 
 // Enum representing parameter types for JDBC
@@ -184,6 +185,7 @@ message SessionInfo {
     TransactionInfo transactionInfo = 4;
     SessionStatus sessionStatus = 5;
     bool isXA = 6;  // Flag indicating this is an XA session
+    string targetServer = 7;  // Server endpoint (host:port) for session stickiness binding
 }
 
 enum ResultType {
