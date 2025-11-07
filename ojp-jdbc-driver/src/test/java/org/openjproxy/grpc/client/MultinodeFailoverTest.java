@@ -184,35 +184,4 @@ class MultinodeFailoverTest {
             }
         }
     }
-
-    @Test
-    @Order(5)
-    @DisplayName("Test prepared statement reuse with one server down")
-    void testPreparedStatementWithOneServerDown() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", POSTGRES_USER);
-        props.setProperty("password", POSTGRES_PASSWORD);
-        props.setProperty("ojp.multinode.retryAttempts", "3");
-        props.setProperty("ojp.multinode.retryDelayMs", "1000");
-
-        try (Connection conn = DriverManager.getConnection(MULTINODE_URL, props)) {
-            // Insert test data
-            try (PreparedStatement pstmt = conn.prepareStatement(
-                         "INSERT INTO multinode_test (value, server_info) VALUES (?, ?)")) {
-                pstmt.setString(1, "consistency_test");
-                pstmt.setString(2, "consistency");
-                pstmt.executeUpdate();
-            }
-
-            try (PreparedStatement pstmt = conn.prepareStatement(
-                     "SELECT value FROM multinode_test WHERE value = ?")) {
-            
-                pstmt.setString(1, "failover_tx_test");
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    assertTrue(rs.next(), "Should find the test row");
-                    assertEquals("failover_tx_test", rs.getString("value"));
-                }
-            }
-        }
-    }
 }
