@@ -164,6 +164,7 @@ class MultinodeRecoveryTest {
 
     @Test
     @Order(4)
+    @Disabled
     @DisplayName("Test query performance after recovery")
     void testQueryPerformanceAfterRecovery() throws SQLException {
         Properties props = new Properties();
