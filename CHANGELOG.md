@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - This ensures that if one server goes down in a multi-server setup, it will automatically recover when brought back online
   - Addresses issue where "Connected to 1 out of 2 servers" message persisted even after bringing downed server back up
 
+- **Fixed "Channel shutdown invoked" errors after server recovery**
+  - Problem: When a failed server recovered, the old channel was immediately shut down, causing errors for in-flight operations
+  - Root cause: Cached `StatementServiceGrpcClient` instances held references to old (shutdown) channel stubs
+  - Solution: 
+    - Removed immediate `channel.shutdown()` call when server fails - channels now garbage collected naturally
+    - `getClient()` now detects when stubs have changed (after recovery) and creates new client with fresh stubs
+    - Prevents "UNAVAILABLE: Channel shutdown invoked" errors during and after recovery
+  - Result: Smooth recovery without disrupting in-flight operations
+
 ### Removed - API Cleanup (Follow-up to PR #93)
 - **Removed deprecated and unused server selection APIs from MultinodeConnectionManager**
   - Removed `selectServer()`: Unused public method, functionality now handled internally by `affinityServer()`

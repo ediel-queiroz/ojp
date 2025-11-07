@@ -309,14 +309,15 @@ public class MultinodeConnectionManager {
         log.warn("Marked server {} as unhealthy due to connection-level error: {}", 
                 endpoint.getAddress(), exception.getMessage());
         
-        // Remove the failed channel
+        // Remove the failed channel from the map, but don't shut it down immediately
+        // The channel will be replaced during recovery, and the old one will be garbage collected
+        // This prevents "Channel shutdown invoked" errors for in-flight operations
         ChannelAndStub channelAndStub = channelMap.remove(endpoint);
         if (channelAndStub != null) {
-            try {
-                channelAndStub.channel.shutdown();
-            } catch (Exception e) {
-                log.debug("Error shutting down channel for {}: {}", endpoint.getAddress(), e.getMessage());
-            }
+            log.debug("Removed channel for {} from map (will be replaced during recovery)", 
+                    endpoint.getAddress());
+            // Note: We intentionally don't call channel.shutdown() here to avoid disrupting
+            // in-flight operations. The channel will be garbage collected when no longer referenced.
         }
     }
     

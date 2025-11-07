@@ -7,6 +7,7 @@ import com.openjproxy.grpc.LobDataBlock;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.OpResult;
 import com.openjproxy.grpc.SessionInfo;
+import com.openjproxy.grpc.StatementServiceGrpc;
 import io.grpc.StatusRuntimeException;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.jdbc.Connection;
@@ -55,53 +56,87 @@ public class MultinodeStatementService implements StatementService {
      * Gets or creates a StatementServiceGrpcClient for a specific server endpoint.
      * The client uses the same gRPC channel and stubs as the MultinodeConnectionManager
      * to ensure session continuity.
+     * 
+     * This method checks if the cached client is still using the current channel/stubs
+     * from the connection manager. If not (e.g., after server recovery), it creates
+     * a new client with the updated stubs.
      */
     private StatementServiceGrpcClient getClient(ServerEndpoint endpoint) {
-        return clientMap.computeIfAbsent(endpoint, ep -> {
-            log.info("Creating new StatementServiceGrpcClient for endpoint: {}", ep.getAddress());
-            
-            // Get the channel and stubs from the connection manager
-            // This ensures we use the SAME channel as the connection, maintaining session continuity
-            MultinodeConnectionManager.ChannelAndStub channelAndStub = 
-                    connectionManager.getChannelAndStub(ep);
-            
-            if (channelAndStub == null) {
-                log.error("Unable to get channel and stub for endpoint: {}", ep.getAddress());
-                throw new RuntimeException("Unable to initialize client for endpoint: " + ep.getAddress());
-            }
-            
-            log.info("Got channel and stub for endpoint {}: blockingStub={}, asyncStub={}", 
-                ep.getAddress(), 
-                System.identityHashCode(channelAndStub.blockingStub),
-                System.identityHashCode(channelAndStub.asyncStub));
-            
-            // Create a client and inject the connection manager's stubs into it
-            // This ensures all operations use the same gRPC connection where the session was created
-            StatementServiceGrpcClient client = new StatementServiceGrpcClient();
-            
+        // Get the current channel and stubs from the connection manager
+        MultinodeConnectionManager.ChannelAndStub currentChannelAndStub = 
+                connectionManager.getChannelAndStub(endpoint);
+        
+        if (currentChannelAndStub == null) {
+            log.error("Unable to get channel and stub for endpoint: {}", endpoint.getAddress());
+            throw new RuntimeException("Unable to initialize client for endpoint: " + endpoint.getAddress());
+        }
+        
+        // Check if we have a cached client
+        StatementServiceGrpcClient cachedClient = clientMap.get(endpoint);
+        
+        if (cachedClient != null) {
             try {
-                // Use reflection to set the stubs to the connection manager's stubs
-                // This is necessary because StatementServiceGrpcClient doesn't have a constructor
-                // that accepts stubs, and we need to use the same channel for session continuity
+                // Check if the cached client is still using the current stubs
                 java.lang.reflect.Field blockingStubField = StatementServiceGrpcClient.class
                     .getDeclaredField("statemetServiceBlockingStub");
                 blockingStubField.setAccessible(true);
-                blockingStubField.set(client, channelAndStub.blockingStub);
+                StatementServiceGrpc.StatementServiceBlockingStub cachedStub = 
+                    (StatementServiceGrpc.StatementServiceBlockingStub) blockingStubField.get(cachedClient);
                 
-                java.lang.reflect.Field asyncStubField = StatementServiceGrpcClient.class
-                    .getDeclaredField("statemetServiceStub");
-                asyncStubField.setAccessible(true);
-                asyncStubField.set(client, channelAndStub.asyncStub);
+                // If the stub is the same as the current one, reuse the client
+                if (cachedStub == currentChannelAndStub.blockingStub) {
+                    return cachedClient;
+                }
                 
-                log.info("Initialized StatementServiceGrpcClient with connection manager's stubs for endpoint: {}", 
-                    ep.getAddress());
+                // The stubs have changed (server was recovered), remove the old client
+                log.info("Stubs changed for endpoint {} (likely after recovery), creating new client", 
+                        endpoint.getAddress());
+                clientMap.remove(endpoint);
+                
             } catch (Exception e) {
-                log.error("Failed to initialize client for endpoint {}: {}", ep.getAddress(), e.getMessage(), e);
-                throw new RuntimeException("Failed to initialize client for endpoint: " + ep.getAddress(), e);
+                log.warn("Error checking cached client stubs for {}: {}", endpoint.getAddress(), e.getMessage());
+                // If we can't check, remove the cached client to be safe
+                clientMap.remove(endpoint);
             }
+        }
+        
+        // Create a new client
+        log.info("Creating new StatementServiceGrpcClient for endpoint: {}", endpoint.getAddress());
+        
+        log.info("Got channel and stub for endpoint {}: blockingStub={}, asyncStub={}", 
+            endpoint.getAddress(), 
+            System.identityHashCode(currentChannelAndStub.blockingStub),
+            System.identityHashCode(currentChannelAndStub.asyncStub));
+        
+        // Create a client and inject the connection manager's stubs into it
+        // This ensures all operations use the same gRPC connection where the session was created
+        StatementServiceGrpcClient client = new StatementServiceGrpcClient();
+        
+        try {
+            // Use reflection to set the stubs to the connection manager's stubs
+            // This is necessary because StatementServiceGrpcClient doesn't have a constructor
+            // that accepts stubs, and we need to use the same channel for session continuity
+            java.lang.reflect.Field blockingStubField = StatementServiceGrpcClient.class
+                .getDeclaredField("statemetServiceBlockingStub");
+            blockingStubField.setAccessible(true);
+            blockingStubField.set(client, currentChannelAndStub.blockingStub);
             
-            return client;
-        });
+            java.lang.reflect.Field asyncStubField = StatementServiceGrpcClient.class
+                .getDeclaredField("statemetServiceStub");
+            asyncStubField.setAccessible(true);
+            asyncStubField.set(client, currentChannelAndStub.asyncStub);
+            
+            log.info("Initialized StatementServiceGrpcClient with connection manager's stubs for endpoint: {}", 
+                endpoint.getAddress());
+        } catch (Exception e) {
+            log.error("Failed to initialize client for endpoint {}: {}", endpoint.getAddress(), e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize client for endpoint: " + endpoint.getAddress(), e);
+        }
+        
+        // Cache the new client
+        clientMap.put(endpoint, client);
+        
+        return client;
     }
     
     /**

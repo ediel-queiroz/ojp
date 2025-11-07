@@ -593,14 +593,22 @@ List<ServerEndpoint> healthyServers = serverEndpoints.stream()
 2. **Every server selection**: Checks all unhealthy servers and attempts recovery
 3. **Continuous**: Recovery happens even when other servers are healthy
 
+**Channel Management During Recovery:**
+- When a server fails, its channel is removed from the map but **not immediately shut down**
+- This prevents "Channel shutdown invoked" errors for in-flight operations
+- During recovery, a new channel is created and replaces the old one in the map
+- Old channels are garbage collected when no longer referenced
+- `MultinodeStatementService` detects when stubs have changed and creates new clients automatically
+
 **Example Scenario:**
 
 1. Initial state: 2 servers, both healthy
-2. Server 1 goes down → marked unhealthy
+2. Server 1 goes down → marked unhealthy, channel removed from map (but not shut down)
 3. System continues using Server 2
 4. After 5 seconds (retry delay):
    - Next `connect()` or operation attempts to recover Server 1
-   - If Server 1 is back online → marked healthy and added back to rotation
+   - If Server 1 is back online → new channel created, marked healthy, added back to rotation
+   - `MultinodeStatementService` detects new stubs and creates fresh client
    - If Server 1 still down → retry delay resets, will try again in 5 seconds
 
 **Key Benefits:**
@@ -608,6 +616,7 @@ List<ServerEndpoint> healthyServers = serverEndpoints.stream()
 - Automatic recovery when downed servers come back online
 - Configurable retry delay to avoid hammering downed servers
 - Works even when other servers are healthy (not just when ALL servers are down)
+- No "Channel shutdown invoked" errors during recovery - smooth transition to new channels
 
 ### Configuration
 
