@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed - API Cleanup (Follow-up to PR #93)
+- **Removed deprecated and unused server selection APIs from MultinodeConnectionManager**
+  - Removed `selectServer()`: Unused public method, functionality now handled internally by `affinityServer()`
+  - Removed `getServerForSession(SessionInfo)`: Deprecated method replaced by `affinityServer(String sessionKey)`
+  - These removals consolidate the multinode server selection API to a single, clearer method
+
 ### Changed - BREAKING
 - **Replaced Java native serialization with Protocol Buffers for Map/List/Properties transport**
   - Maps, Lists, and Properties objects are now serialized using Protocol Buffers (proto3) instead of Java native serialization
@@ -28,6 +34,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Empty containers serialize correctly (not as empty payloads)
 
 ### Migration Guide
+
+#### Migrating from Deprecated Server Selection APIs (PR #93 Follow-up)
+
+If you were directly using `MultinodeConnectionManager` APIs (rare, as these are internal):
+
+**Before (deprecated):**
+```java
+// Using getServerForSession
+SessionInfo sessionInfo = ...;
+ServerEndpoint server = connectionManager.getServerForSession(sessionInfo);
+
+// Using selectServer
+ServerEndpoint server = connectionManager.selectServer();
+```
+
+**After (current API):**
+```java
+// Replace getServerForSession with affinityServer
+SessionInfo sessionInfo = ...;
+String sessionKey = (sessionInfo != null && sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) 
+        ? sessionInfo.getSessionUUID() : null;
+ServerEndpoint server = connectionManager.affinityServer(sessionKey);
+
+// selectServer is removed - use affinityServer with null session key for round-robin
+ServerEndpoint server = connectionManager.affinityServer(null);
+```
+
+**Key Points:**
+- `affinityServer(String sessionKey)` is the unified API for server selection
+- Pass `null` or empty string for round-robin selection (no session affinity)
+- Pass a session UUID for session-sticky routing
+- Most users don't need to change anything as these are internal APIs used by `MultinodeStatementService`
+
+#### Protocol Buffers Serialization Migration
+
 For applications using OJP:
 1. Update both server and driver to the same version simultaneously
 2. No code changes required in your application - the change is transparent at the API level

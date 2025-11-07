@@ -176,7 +176,9 @@ public class MultinodeStatementService implements StatementService {
                                                                       ThrowingFunction<StatementServiceGrpcClient, OpResult> operation) 
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
-        ServerEndpoint server = connectionManager.getServerForSession(requestSessionInfo);
+        String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty()) 
+                ? requestSessionInfo.getSessionUUID() : null;
+        ServerEndpoint server = connectionManager.affinityServer(sessionKey);
         
         log.debug("executeOpResultWithSessionStickinessAndBinding: session={}, server={}", 
             requestSessionInfo != null ? requestSessionInfo.getSessionUUID() : "null", 
@@ -242,7 +244,9 @@ public class MultinodeStatementService implements StatementService {
                                                                                 ThrowingFunction<StatementServiceGrpcClient, Iterator<OpResult>> operation) 
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
-        ServerEndpoint server = connectionManager.getServerForSession(requestSessionInfo);
+        String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty()) 
+                ? requestSessionInfo.getSessionUUID() : null;
+        ServerEndpoint server = connectionManager.affinityServer(sessionKey);
         
         log.debug("executeIteratorWithSessionStickinessAndBinding: session={}, server={}", 
             requestSessionInfo != null ? requestSessionInfo.getSessionUUID() : "null", 
@@ -328,7 +332,9 @@ public class MultinodeStatementService implements StatementService {
                                                                 ThrowingFunction<StatementServiceGrpcClient, SessionInfo> operation) 
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
-        ServerEndpoint server = connectionManager.getServerForSession(requestSessionInfo);
+        String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty()) 
+                ? requestSessionInfo.getSessionUUID() : null;
+        ServerEndpoint server = connectionManager.affinityServer(sessionKey);
         
         log.info("executeWithSessionStickinessAndBinding: session={}, server={}", 
             requestSessionInfo != null ? requestSessionInfo.getSessionUUID() : "null", 
@@ -448,7 +454,7 @@ public class MultinodeStatementService implements StatementService {
                     // Session is bound - terminate on that specific server
                     log.info("Terminating session {} on bound server {}", session.getSessionUUID(), boundServer);
                     try {
-                        ServerEndpoint server = connectionManager.getServerForSession(session);
+                        ServerEndpoint server = connectionManager.affinityServer(session.getSessionUUID());
                         StatementServiceGrpcClient client = getClient(server);
                         client.terminateSession(session);
                         log.info("Successfully terminated session {} on server {}", 
@@ -634,7 +640,9 @@ public class MultinodeStatementService implements StatementService {
                                                ThrowingFunction<StatementServiceGrpcClient, T> operation) 
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
-        ServerEndpoint server = connectionManager.getServerForSession(sessionInfo);
+        String sessionKey = (sessionInfo != null && sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) 
+                ? sessionInfo.getSessionUUID() : null;
+        ServerEndpoint server = connectionManager.affinityServer(sessionKey);
         
         log.info("executeWithSessionStickiness: session={}, server={}", 
             sessionInfo != null ? sessionInfo.getSessionUUID() : "null", 

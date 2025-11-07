@@ -187,17 +187,6 @@ public class MultinodeConnectionManager {
         return primarySessionInfo;
     }
     
-    /**
-     * Selects a server for a new request using round-robin.
-     * For non-session requests or new sessions.
-     */
-    public ServerEndpoint selectServer() throws SQLException {
-        ServerEndpoint server = selectHealthyServer();
-        if (server == null) {
-            throw new SQLException("No healthy servers available");
-        }
-        return server;
-    }
     
     /**
      * Gets the appropriate server based on session affinity.
@@ -241,19 +230,6 @@ public class MultinodeConnectionManager {
         return sessionServer;
     }
     
-    /**
-     * Gets the appropriate server for a session-bound request.
-     * 
-     * @deprecated Use affinityServer(String sessionKey) instead
-     */
-    @Deprecated
-    public ServerEndpoint getServerForSession(SessionInfo sessionInfo) throws SQLException {
-        String sessionKey = null;
-        if (sessionInfo != null && sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) {
-            sessionKey = sessionInfo.getSessionUUID();
-        }
-        return affinityServer(sessionKey);
-    }
     
     /**
      * Gets the channel and stub for a specific server.

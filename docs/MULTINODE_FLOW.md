@@ -230,49 +230,63 @@ return operation.apply(client);
 public ServerEndpoint affinityServer(String sessionKey) throws SQLException {
     if (sessionKey == null || sessionKey.isEmpty()) {
         // NO SESSION: Use round-robin
-        return selectServer();  // Round-robin selection
+        log.info("No session key, using round-robin selection");
+        return selectHealthyServer();
     }
     
-    // SESSION EXISTS: Use session stickiness
-    ServerEndpoint server = sessionToServerMap.get(sessionKey);
+    log.info("Looking up server for session: {}", sessionKey);
+    ServerEndpoint sessionServer = sessionToServerMap.get(sessionKey);
     
-    if (server == null) {
-        // Session not found (shouldn't happen in normal flow)
-        throw new SQLException("No server found for session: " + sessionKey);
+    // Session must be bound - throw exception if not found
+    if (sessionServer == null) {
+        log.error("Session {} has no associated server. Available sessions: {}. This indicates the session binding was lost.", 
+                sessionKey, sessionToServerMap.keySet());
+        throw new SQLException("Session " + sessionKey + 
+                " has no associated server. Session may have expired or server may be unavailable. " +
+                "Available bound sessions: " + sessionToServerMap.keySet());
     }
     
-    if (!server.isHealthy()) {
-        // Session's server is down - throw exception
-        throw new SQLException("Server for session " + sessionKey + " is unavailable");
+    log.info("Session {} is bound to server {}", sessionKey, sessionServer.getAddress());
+    
+    if (!sessionServer.isHealthy()) {
+        // Remove from map and throw exception - do NOT fall back to round-robin
+        sessionToServerMap.remove(sessionKey);
+        throw new SQLException("Session " + sessionKey + 
+                " is bound to server " + sessionServer.getAddress() + 
+                " which is currently unavailable. Cannot continue with this session.");
     }
     
-    return server;
+    return sessionServer;
 }
 ```
 
-**Round-Robin Selection (`selectServer()`):**
+**Round-Robin Selection (internal `selectHealthyServer()`):**
 
 ```java
-public ServerEndpoint selectServer() throws SQLException {
-    ServerEndpoint server = selectHealthyServer();
-    if (server == null) {
-        throw new SQLException("No healthy servers available");
-    }
-    return server;
-}
-
 private ServerEndpoint selectHealthyServer() {
     List<ServerEndpoint> healthyServers = serverEndpoints.stream()
-        .filter(ServerEndpoint::isHealthy)
-        .collect(Collectors.toList());
+            .filter(ServerEndpoint::isHealthy)
+            .collect(Collectors.toList());
     
     if (healthyServers.isEmpty()) {
+        // No healthy servers, try to recover some servers
+        attemptServerRecovery();
+        healthyServers = serverEndpoints.stream()
+                .filter(ServerEndpoint::isHealthy)
+                .collect(Collectors.toList());
+    }
+    
+    if (healthyServers.isEmpty()) {
+        log.error("No healthy servers available");
         return null;
     }
     
-    // Round-robin: increment counter and mod by number of healthy servers
-    int index = roundRobinCounter.getAndIncrement() % healthyServers.size();
-    return healthyServers.get(index);
+    // Round-robin selection among healthy servers
+    int index = Math.abs(roundRobinCounter.getAndIncrement()) % healthyServers.size();
+    ServerEndpoint selected = healthyServers.get(index);
+    
+    log.debug("Selected server {} for request (round-robin)", selected.getAddress());
+    return selected;
 }
 ```
 
