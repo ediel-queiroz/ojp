@@ -12,6 +12,7 @@ import java.sql.Time;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
@@ -149,7 +150,7 @@ public class TemporalConverter {
      * based on the original_type field.
      * 
      * @param timestampWithZone The proto message (can be null)
-     * @return java.sql.Timestamp or java.util.Calendar based on original_type, or null if input is null
+     * @return java.sql.Timestamp, java.util.Calendar, or java.time.OffsetDateTime based on original_type, or null if input is null
      * @throws IllegalArgumentException if timezone is missing or empty
      */
     public static Object fromTimestampWithZoneToObject(TimestampWithZone timestampWithZone) {
@@ -163,6 +164,11 @@ public class TemporalConverter {
         // If original type was Calendar, reconstruct it
         if (originalType == TemporalType.TEMPORAL_TYPE_CALENDAR) {
             return timestampWithZoneToCalendar(timestampWithZone);
+        }
+        
+        // If original type was OffsetDateTime, reconstruct it
+        if (originalType == TemporalType.TEMPORAL_TYPE_OFFSET_DATE_TIME) {
+            return timestampWithZoneToOffsetDateTime(timestampWithZone);
         }
         
         // Default to Timestamp (covers TEMPORAL_TYPE_TIMESTAMP and TEMPORAL_TYPE_UNSPECIFIED)
@@ -339,5 +345,75 @@ public class TemporalConverter {
         );
         
         return Time.valueOf(localTime);
+    }
+    
+    /**
+     * Convert java.time.OffsetDateTime to TimestampWithZone proto message.
+     * Sets original_type to OFFSET_DATE_TIME.
+     * 
+     * @param offsetDateTime The OffsetDateTime to convert (can be null)
+     * @return TimestampWithZone proto message, or null if offsetDateTime is null
+     */
+    public static TimestampWithZone offsetDateTimeToTimestampWithZone(OffsetDateTime offsetDateTime) {
+        if (offsetDateTime == null) {
+            return null;
+        }
+        
+        // Convert to Instant to get epoch seconds and nanos
+        Instant instant = offsetDateTime.toInstant();
+        
+        // Build google.protobuf.Timestamp
+        Timestamp protoTimestamp = Timestamp.newBuilder()
+            .setSeconds(instant.getEpochSecond())
+            .setNanos(instant.getNano())
+            .build();
+        
+        // Build TimestampWithZone with timezone string and original type
+        return TimestampWithZone.newBuilder()
+            .setInstant(protoTimestamp)
+            .setTimezone(offsetDateTime.getOffset().getId())
+            .setOriginalType(TemporalType.TEMPORAL_TYPE_OFFSET_DATE_TIME)
+            .build();
+    }
+    
+    /**
+     * Convert TimestampWithZone proto message to java.time.OffsetDateTime.
+     * 
+     * @param timestampWithZone The proto message (can be null)
+     * @return java.time.OffsetDateTime, or null if input is null
+     * @throws IllegalArgumentException if timezone is missing or empty
+     */
+    public static OffsetDateTime timestampWithZoneToOffsetDateTime(TimestampWithZone timestampWithZone) {
+        if (timestampWithZone == null) {
+            return null;
+        }
+        
+        // Validate timezone is present
+        String timezone = timestampWithZone.getTimezone();
+        if (timezone == null || timezone.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                "Timezone must not be empty or missing in TimestampWithZone. " +
+                "Server requires timezone to be set by the client."
+            );
+        }
+        
+        // Parse timezone - it could be a ZoneId or an offset string
+        ZoneId zoneId;
+        try {
+            zoneId = ZoneId.of(timezone);
+        } catch (Exception e) {
+            log.debug("Failed to parse timezone '{}': {}", timezone, e.getMessage());
+            throw new IllegalArgumentException("Invalid timezone string: " + timezone, e);
+        }
+        
+        // Convert proto timestamp to Instant
+        Timestamp protoTimestamp = timestampWithZone.getInstant();
+        Instant instant = Instant.ofEpochSecond(
+            protoTimestamp.getSeconds(),
+            protoTimestamp.getNanos()
+        );
+        
+        // Create OffsetDateTime from Instant and ZoneId
+        return OffsetDateTime.ofInstant(instant, zoneId);
     }
 }

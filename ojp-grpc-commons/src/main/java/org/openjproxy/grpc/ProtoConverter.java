@@ -29,6 +29,7 @@ import java.sql.RowId;
 import java.sql.RowIdLifetime;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
@@ -359,6 +360,10 @@ public class ProtoConverter {
             // java.util.Calendar or GregorianCalendar - convert to TimestampWithZone
             // Use calendarToTimestampWithZone to preserve original type as CALENDAR
             builder.setTimestampValue(TemporalConverter.calendarToTimestampWithZone((Calendar) value));
+        } else if (value instanceof OffsetDateTime) {
+            // java.time.OffsetDateTime - convert to TimestampWithZone
+            // Use offsetDateTimeToTimestampWithZone to preserve original type as OFFSET_DATE_TIME
+            builder.setTimestampValue(TemporalConverter.offsetDateTimeToTimestampWithZone((OffsetDateTime) value));
         } else if (value instanceof Map || value instanceof List || value instanceof java.util.Properties) {
             // For Map, List, and Properties objects, use protobuf serialization
             // instead of Java serialization for language independence
