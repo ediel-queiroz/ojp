@@ -22,7 +22,8 @@ public class SessionInfoUtils {
                 .setSessionStatus(activeSessionInfo.getSessionStatus())
                 .setTransactionInfo(activeSessionInfo.getTransactionInfo())
                 .setIsXA(activeSessionInfo.getIsXA())
-                .setTargetServer(activeSessionInfo.getTargetServer());
+                .setTargetServer(activeSessionInfo.getTargetServer())
+                .setClusterHealth(activeSessionInfo.getClusterHealth());
     }
     
     /**
@@ -52,6 +53,7 @@ public class SessionInfoUtils {
                 .setTransactionInfo(sessionInfo.getTransactionInfo())
                 .setIsXA(sessionInfo.getIsXA())
                 .setTargetServer(effectiveTargetServer != null ? effectiveTargetServer : "")
+                .setClusterHealth(sessionInfo.getClusterHealth())
                 .build();
     }
 }

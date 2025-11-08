@@ -100,6 +100,110 @@ public class ConnectionPoolConfigurer {
     public static MultinodePoolCoordinator getPoolCoordinator() {
         return poolCoordinator;
     }
+    
+    /**
+     * Processes cluster health from client and triggers pool rebalancing if health has changed.
+     * This should be called on each request that includes cluster health information.
+     * 
+     * @param connHash Connection hash
+     * @param clusterHealth Cluster health string from client
+     * @param clusterHealthTracker Tracker to detect health changes
+     * @param dataSource HikariDataSource to apply pool size changes to (can be null)
+     */
+    public static void processClusterHealth(String connHash, String clusterHealth, 
+                                           org.openjproxy.grpc.server.ClusterHealthTracker clusterHealthTracker,
+                                           com.zaxxer.hikari.HikariDataSource dataSource) {
+        if (connHash == null || connHash.isEmpty() || clusterHealth == null || clusterHealth.isEmpty()) {
+            return;
+        }
+        
+        // Check if cluster health has changed
+        boolean healthChanged = clusterHealthTracker.hasHealthChanged(connHash, clusterHealth);
+        
+        if (healthChanged) {
+            // Count healthy servers
+            int healthyServerCount = clusterHealthTracker.countHealthyServers(clusterHealth);
+            
+            log.info("Cluster health changed for {}, healthy servers: {}, triggering pool rebalancing", 
+                    connHash, healthyServerCount);
+            
+            // Update the pool coordinator with new healthy server count
+            poolCoordinator.updateHealthyServers(connHash, healthyServerCount);
+            
+            // Apply new pool sizes to existing HikariDataSource if provided
+            if (dataSource != null) {
+                applyPoolSizeChanges(connHash, dataSource);
+            }
+        }
+    }
+    
+    /**
+     * Applies current pool allocation sizes to an existing HikariDataSource.
+     * HikariCP supports dynamic resizing of pool sizes at runtime.
+     * 
+     * Important notes on HikariCP pool reduction:
+     * - When reducing pool size, setMinimumIdle() must be called BEFORE setMaximumPoolSize()
+     *   to avoid validation errors (minIdle must be <= maxPoolSize)
+     * - HikariCP's softEvictConnections() helps release idle connections above the new minimumIdle
+     * - Connections are evicted gradually as they become idle, not immediately
+     * 
+     * @param connHash Connection hash to look up pool allocation
+     * @param dataSource HikariDataSource to update
+     */
+    public static void applyPoolSizeChanges(String connHash, com.zaxxer.hikari.HikariDataSource dataSource) {
+        MultinodePoolCoordinator.PoolAllocation allocation = poolCoordinator.getPoolAllocation(connHash);
+        
+        if (allocation == null) {
+            log.debug("No pool allocation found for {}, skipping pool resize", connHash);
+            return;
+        }
+        
+        int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
+        int newMinIdle = allocation.getCurrentMinIdle();
+        
+        // Get current sizes for logging
+        int currentMaxPoolSize = dataSource.getMaximumPoolSize();
+        int currentMinIdle = dataSource.getMinimumIdle();
+        
+        if (currentMaxPoolSize != newMaxPoolSize || currentMinIdle != newMinIdle) {
+            log.info("Resizing HikariCP pool for {}: maxPoolSize {} -> {}, minIdle {} -> {}", 
+                    connHash, currentMaxPoolSize, newMaxPoolSize, currentMinIdle, newMinIdle);
+            
+            // Determine if we're increasing or decreasing pool sizes
+            boolean isIncreasing = (newMaxPoolSize > currentMaxPoolSize) || (newMinIdle > currentMinIdle);
+            boolean isDecreasing = (newMaxPoolSize < currentMaxPoolSize) || (newMinIdle < currentMinIdle);
+            
+            if (isDecreasing) {
+                // When reducing: set minIdle first, then maxPoolSize
+                // This avoids HikariCP validation errors (minIdle <= maxPoolSize)
+                dataSource.setMinimumIdle(newMinIdle);
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                
+                // Trigger soft eviction to release idle connections above the new minimum
+                // This helps reduce the pool size more quickly by marking excess connections for closure
+                dataSource.getHikariPoolMXBean().softEvictConnections();
+                
+                log.info("Successfully resized (decreased) HikariCP pool for {}. Idle connections above {} will be evicted.", 
+                        connHash, newMinIdle);
+            } else if (isIncreasing) {
+                // When increasing: set maxPoolSize first, then minIdle
+                // This allows the pool to grow before setting the new minimum
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                dataSource.setMinimumIdle(newMinIdle);
+                
+                log.info("Successfully resized (increased) HikariCP pool for {}", connHash);
+            } else {
+                // Mixed case (one increasing, one decreasing) - be conservative
+                // Set minIdle first to avoid violations
+                dataSource.setMinimumIdle(newMinIdle);
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                
+                log.info("Successfully resized HikariCP pool for {}", connHash);
+            }
+        } else {
+            log.debug("Pool sizes unchanged for {}, no resize needed", connHash);
+        }
+    }
 
     /**
      * Extracts client properties from connection details.

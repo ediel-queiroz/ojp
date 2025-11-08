@@ -140,6 +140,26 @@ public class MultinodeStatementService implements StatementService {
     }
     
     /**
+     * Enhances SessionInfo with current cluster health status.
+     * Creates a new SessionInfo with the clusterHealth field populated based on
+     * the current health status of all servers in the cluster.
+     * 
+     * @param sessionInfo The original session info
+     * @return A new SessionInfo with cluster health populated
+     */
+    private SessionInfo withClusterHealth(SessionInfo sessionInfo) {
+        if (sessionInfo == null) {
+            return null;
+        }
+        
+        String clusterHealth = connectionManager.generateClusterHealth();
+        
+        return SessionInfo.newBuilder(sessionInfo)
+                .setClusterHealth(clusterHealth)
+                .build();
+    }
+    
+    /**
      * Checks if a session was created (sessionUUID went from empty to non-empty) and binds it to the server.
      * Also ensures existing sessions remain bound to the correct server.
      * This is called after operations that may create a session (e.g., startTransaction).
@@ -436,8 +456,9 @@ public class MultinodeStatementService implements StatementService {
     @Override
     public OpResult executeUpdate(SessionInfo sessionInfo, String sql, List<Parameter> params, 
                                   String statementUUID, Map<String, Object> properties) throws SQLException {
-        return executeOpResultWithSessionStickinessAndBinding(sessionInfo, client -> 
-            client.executeUpdate(sessionInfo, sql, params, statementUUID, properties)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        return executeOpResultWithSessionStickinessAndBinding(enhancedSessionInfo, client -> 
+            client.executeUpdate(enhancedSessionInfo, sql, params, statementUUID, properties)
         );
     }
     
@@ -451,15 +472,17 @@ public class MultinodeStatementService implements StatementService {
     public Iterator<OpResult> executeQuery(SessionInfo sessionInfo, String sql, List<Parameter> params, 
                                            String statementUUID, Map<String, Object> properties) throws SQLException {
         // For executeQuery, we execute with binding check and wrap the iterator to check subsequent results
-        return executeIteratorWithSessionStickinessAndBinding(sessionInfo, client -> 
-            client.executeQuery(sessionInfo, sql, params, statementUUID, properties)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        return executeIteratorWithSessionStickinessAndBinding(enhancedSessionInfo, client -> 
+            client.executeQuery(enhancedSessionInfo, sql, params, statementUUID, properties)
         );
     }
     
     @Override
     public OpResult fetchNextRows(SessionInfo sessionInfo, String resultSetUUID, int size) throws SQLException {
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.fetchNextRows(sessionInfo, resultSetUUID, size)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.fetchNextRows(enhancedSessionInfo, resultSetUUID, size)
         );
     }
     
@@ -547,30 +570,37 @@ public class MultinodeStatementService implements StatementService {
     
     @Override
     public SessionInfo startTransaction(SessionInfo session) throws SQLException {
-        return executeWithSessionStickinessAndBinding(session, client -> 
-            client.startTransaction(session)
+        SessionInfo enhancedSessionInfo = withClusterHealth(session);
+        return executeWithSessionStickinessAndBinding(enhancedSessionInfo, client -> 
+            client.startTransaction(enhancedSessionInfo)
         );
     }
     
     @Override
     public SessionInfo commitTransaction(SessionInfo session) throws SQLException {
-        return executeWithSessionStickinessAndBinding(session, client -> 
-            client.commitTransaction(session)
+        SessionInfo enhancedSessionInfo = withClusterHealth(session);
+        return executeWithSessionStickinessAndBinding(enhancedSessionInfo, client -> 
+            client.commitTransaction(enhancedSessionInfo)
         );
     }
     
     @Override
     public SessionInfo rollbackTransaction(SessionInfo session) throws SQLException {
-        return executeWithSessionStickinessAndBinding(session, client -> 
-            client.rollbackTransaction(session)
+        SessionInfo enhancedSessionInfo = withClusterHealth(session);
+        return executeWithSessionStickinessAndBinding(enhancedSessionInfo, client -> 
+            client.rollbackTransaction(enhancedSessionInfo)
         );
     }
     
     @Override
     public CallResourceResponse callResource(CallResourceRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.callResource(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        CallResourceRequest enhancedRequest = CallResourceRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.callResource(enhancedRequest)
         );
     }
     
@@ -578,56 +608,84 @@ public class MultinodeStatementService implements StatementService {
     @Override
     public com.openjproxy.grpc.XaResponse xaStart(com.openjproxy.grpc.XaStartRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaStart(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaStartRequest enhancedRequest = com.openjproxy.grpc.XaStartRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaStart(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaResponse xaEnd(com.openjproxy.grpc.XaEndRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaEnd(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaEndRequest enhancedRequest = com.openjproxy.grpc.XaEndRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaEnd(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaPrepareResponse xaPrepare(com.openjproxy.grpc.XaPrepareRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaPrepare(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaPrepareRequest enhancedRequest = com.openjproxy.grpc.XaPrepareRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaPrepare(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaResponse xaCommit(com.openjproxy.grpc.XaCommitRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaCommit(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaCommitRequest enhancedRequest = com.openjproxy.grpc.XaCommitRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaCommit(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaResponse xaRollback(com.openjproxy.grpc.XaRollbackRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaRollback(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaRollbackRequest enhancedRequest = com.openjproxy.grpc.XaRollbackRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaRollback(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaRecoverResponse xaRecover(com.openjproxy.grpc.XaRecoverRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaRecover(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaRecoverRequest enhancedRequest = com.openjproxy.grpc.XaRecoverRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaRecover(enhancedRequest)
         );
     }
     
     @Override
     public com.openjproxy.grpc.XaResponse xaForget(com.openjproxy.grpc.XaForgetRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaForget(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaForgetRequest enhancedRequest = com.openjproxy.grpc.XaForgetRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaForget(enhancedRequest)
         );
     }
     
@@ -635,8 +693,12 @@ public class MultinodeStatementService implements StatementService {
     public com.openjproxy.grpc.XaSetTransactionTimeoutResponse xaSetTransactionTimeout(
             com.openjproxy.grpc.XaSetTransactionTimeoutRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaSetTransactionTimeout(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaSetTransactionTimeoutRequest enhancedRequest = com.openjproxy.grpc.XaSetTransactionTimeoutRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaSetTransactionTimeout(enhancedRequest)
         );
     }
     
@@ -644,8 +706,12 @@ public class MultinodeStatementService implements StatementService {
     public com.openjproxy.grpc.XaGetTransactionTimeoutResponse xaGetTransactionTimeout(
             com.openjproxy.grpc.XaGetTransactionTimeoutRequest request) throws SQLException {
         SessionInfo sessionInfo = request.getSession();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaGetTransactionTimeout(request)
+        SessionInfo enhancedSessionInfo = withClusterHealth(sessionInfo);
+        com.openjproxy.grpc.XaGetTransactionTimeoutRequest enhancedRequest = com.openjproxy.grpc.XaGetTransactionTimeoutRequest.newBuilder(request)
+                .setSession(enhancedSessionInfo)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo, client -> 
+            client.xaGetTransactionTimeout(enhancedRequest)
         );
     }
     
@@ -653,9 +719,16 @@ public class MultinodeStatementService implements StatementService {
     public com.openjproxy.grpc.XaIsSameRMResponse xaIsSameRM(
             com.openjproxy.grpc.XaIsSameRMRequest request) throws SQLException {
         // For isSameRM, use the first session for server selection
-        SessionInfo sessionInfo = request.getSession1();
-        return executeWithSessionStickiness(sessionInfo, client -> 
-            client.xaIsSameRM(request)
+        SessionInfo sessionInfo1 = request.getSession1();
+        SessionInfo sessionInfo2 = request.getSession2();
+        SessionInfo enhancedSessionInfo1 = withClusterHealth(sessionInfo1);
+        SessionInfo enhancedSessionInfo2 = withClusterHealth(sessionInfo2);
+        com.openjproxy.grpc.XaIsSameRMRequest enhancedRequest = com.openjproxy.grpc.XaIsSameRMRequest.newBuilder(request)
+                .setSession1(enhancedSessionInfo1)
+                .setSession2(enhancedSessionInfo2)
+                .build();
+        return executeWithSessionStickiness(enhancedSessionInfo1, client -> 
+            client.xaIsSameRM(enhancedRequest)
         );
     }
     
