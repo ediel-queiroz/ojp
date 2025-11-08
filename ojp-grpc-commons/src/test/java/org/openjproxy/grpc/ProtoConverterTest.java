@@ -211,4 +211,39 @@ public class ProtoConverterTest {
             assertEquals(original, result, "Failed for value: " + original);
         }
     }
+    
+    @Test
+    void testOffsetDateTimeSerialization() {
+        // Test that OffsetDateTime can be serialized and deserialized
+        java.time.OffsetDateTime offsetDateTime = java.time.OffsetDateTime.parse("2024-11-02T14:30:45.123456789+02:00");
+        
+        ParameterValue pv = ProtoConverter.toParameterValue(offsetDateTime);
+        
+        // Verify timestamp_value is set
+        assertEquals(ParameterValue.ValueCase.TIMESTAMP_VALUE, pv.getValueCase());
+        assertNotNull(pv.getTimestampValue());
+        assertEquals(com.openjproxy.grpc.TemporalType.TEMPORAL_TYPE_OFFSET_DATE_TIME, pv.getTimestampValue().getOriginalType());
+        
+        // Convert back to Object
+        Object result = ProtoConverter.fromParameterValue(pv, null);
+        assertNotNull(result);
+        assertTrue(result instanceof java.time.OffsetDateTime);
+        assertEquals(offsetDateTime.toInstant(), ((java.time.OffsetDateTime) result).toInstant());
+    }
+    
+    @Test
+    void testOffsetDateTimeNullSerialization() {
+        // Test that null OffsetDateTime is handled correctly
+        java.time.OffsetDateTime offsetDateTime = null;
+        
+        ParameterValue pv = ProtoConverter.toParameterValue(offsetDateTime);
+        
+        // Verify is_null is set
+        assertEquals(ParameterValue.ValueCase.IS_NULL, pv.getValueCase());
+        assertTrue(pv.getIsNull());
+        
+        // Convert back to Object
+        Object result = ProtoConverter.fromParameterValue(pv, null);
+        assertNull(result);
+    }
 }

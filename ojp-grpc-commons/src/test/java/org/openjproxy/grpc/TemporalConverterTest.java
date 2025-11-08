@@ -4,6 +4,7 @@ import com.google.protobuf.Timestamp;
 import com.google.type.Date;
 import com.google.type.TimeOfDay;
 import com.openjproxy.grpc.TimestampWithZone;
+import com.openjproxy.grpc.TemporalType;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Time;
@@ -259,5 +260,70 @@ class TemporalConverterTest {
         
         java.sql.Timestamp result = TemporalConverter.fromTimestampWithZone(proto);
         assertEquals(timestamp, result);
+    }
+    
+    @Test
+    void testOffsetDateTimeToTimestampWithZone_roundTrip() {
+        // Test with OffsetDateTime and UTC offset
+        java.time.OffsetDateTime offsetDateTime = java.time.OffsetDateTime.parse("2024-11-02T14:30:45.123456789Z");
+        
+        TimestampWithZone proto = TemporalConverter.offsetDateTimeToTimestampWithZone(offsetDateTime);
+        assertNotNull(proto);
+        assertEquals("Z", proto.getTimezone());
+        assertEquals(TemporalType.TEMPORAL_TYPE_OFFSET_DATE_TIME, proto.getOriginalType());
+        
+        java.time.OffsetDateTime result = TemporalConverter.timestampWithZoneToOffsetDateTime(proto);
+        assertNotNull(result);
+        assertEquals(offsetDateTime.toInstant(), result.toInstant());
+    }
+    
+    @Test
+    void testOffsetDateTimeToTimestampWithZone_withOffset() {
+        // Test with a specific offset
+        java.time.OffsetDateTime offsetDateTime = java.time.OffsetDateTime.parse("2024-11-02T14:30:45.123+02:00");
+        
+        TimestampWithZone proto = TemporalConverter.offsetDateTimeToTimestampWithZone(offsetDateTime);
+        assertNotNull(proto);
+        assertEquals("+02:00", proto.getTimezone());
+        assertEquals(TemporalType.TEMPORAL_TYPE_OFFSET_DATE_TIME, proto.getOriginalType());
+        
+        java.time.OffsetDateTime result = TemporalConverter.timestampWithZoneToOffsetDateTime(proto);
+        assertNotNull(result);
+        assertEquals(offsetDateTime.toInstant(), result.toInstant());
+    }
+    
+    @Test
+    void testOffsetDateTimeToTimestampWithZone_null() {
+        TimestampWithZone proto = TemporalConverter.offsetDateTimeToTimestampWithZone(null);
+        assertNull(proto);
+        
+        java.time.OffsetDateTime result = TemporalConverter.timestampWithZoneToOffsetDateTime(null);
+        assertNull(result);
+    }
+    
+    @Test
+    void testOffsetDateTimeToTimestampWithZone_preservesNanos() {
+        // Test that nanoseconds are preserved
+        java.time.OffsetDateTime offsetDateTime = java.time.OffsetDateTime.parse("2024-11-02T14:30:45.123456789+05:30");
+        
+        TimestampWithZone proto = TemporalConverter.offsetDateTimeToTimestampWithZone(offsetDateTime);
+        java.time.OffsetDateTime result = TemporalConverter.timestampWithZoneToOffsetDateTime(proto);
+        
+        assertEquals(offsetDateTime.getNano(), result.getNano());
+        assertEquals(offsetDateTime.toInstant(), result.toInstant());
+    }
+    
+    @Test
+    void testFromTimestampWithZoneToObject_withOffsetDateTime() {
+        // Test that fromTimestampWithZoneToObject correctly returns OffsetDateTime
+        // when original_type is TEMPORAL_TYPE_OFFSET_DATE_TIME
+        java.time.OffsetDateTime offsetDateTime = java.time.OffsetDateTime.parse("2024-11-02T14:30:45.123+02:00");
+        
+        TimestampWithZone proto = TemporalConverter.offsetDateTimeToTimestampWithZone(offsetDateTime);
+        Object result = TemporalConverter.fromTimestampWithZoneToObject(proto);
+        
+        assertNotNull(result);
+        assertTrue(result instanceof java.time.OffsetDateTime);
+        assertEquals(offsetDateTime.toInstant(), ((java.time.OffsetDateTime) result).toInstant());
     }
 }
