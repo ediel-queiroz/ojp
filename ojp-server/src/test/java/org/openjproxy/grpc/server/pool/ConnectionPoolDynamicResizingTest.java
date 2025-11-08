@@ -142,4 +142,58 @@ class ConnectionPoolDynamicResizingTest {
         assertEquals(20, dataSource.getMaximumPoolSize());
         assertEquals(5, dataSource.getMinimumIdle());
     }
+
+    @Test
+    void testPoolReductionWhenServerRecovers() {
+        // Setup: Create a test HikariDataSource
+        String connHash = "test-conn-hash-recovery";
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:h2:mem:test_recovery");
+        config.setUsername("sa");
+        config.setPassword("");
+        config.setMaximumPoolSize(20); // Original: 20 / 2 servers = 10 each
+        config.setMinimumIdle(10);     // Original: 10 / 2 servers = 5 each
+        
+        dataSource = new HikariDataSource(config);
+        
+        // Simulate initial 2-server setup
+        MultinodePoolCoordinator coordinator = ConnectionPoolConfigurer.getPoolCoordinator();
+        coordinator.calculatePoolSizes(connHash, 20, 10, Arrays.asList("server1:1059", "server2:1059"));
+        
+        MultinodePoolCoordinator.PoolAllocation allocation = coordinator.getPoolAllocation(connHash);
+        dataSource.setMaximumPoolSize(allocation.getCurrentMaxPoolSize());
+        dataSource.setMinimumIdle(allocation.getCurrentMinIdle());
+        
+        // Initial state: 2 servers, each with max=10, min=5
+        assertEquals(10, dataSource.getMaximumPoolSize());
+        assertEquals(5, dataSource.getMinimumIdle());
+        
+        ClusterHealthTracker tracker = new ClusterHealthTracker();
+        
+        // Step 1: Both servers UP (baseline)
+        String bothUp = "server1:1059(UP);server2:1059(UP)";
+        ConnectionPoolConfigurer.processClusterHealth(connHash, bothUp, tracker, dataSource);
+        assertEquals(10, dataSource.getMaximumPoolSize());
+        assertEquals(5, dataSource.getMinimumIdle());
+        
+        // Step 2: Server 2 goes DOWN - pool should INCREASE
+        String oneDown = "server1:1059(UP);server2:1059(DOWN)";
+        ConnectionPoolConfigurer.processClusterHealth(connHash, oneDown, tracker, dataSource);
+        
+        assertEquals(20, dataSource.getMaximumPoolSize(), "Pool should increase to 20 when 1 server down");
+        assertEquals(10, dataSource.getMinimumIdle(), "Min idle should increase to 10 when 1 server down");
+        
+        // Step 3: Server 2 comes back UP - pool should DECREASE back to original
+        String bothUpAgain = "server1:1059(UP);server2:1059(UP)";
+        ConnectionPoolConfigurer.processClusterHealth(connHash, bothUpAgain, tracker, dataSource);
+        
+        assertEquals(10, dataSource.getMaximumPoolSize(), "Pool should decrease back to 10 when server recovers");
+        assertEquals(5, dataSource.getMinimumIdle(), "Min idle should decrease back to 5 when server recovers");
+        
+        // Verify coordinator state
+        allocation = coordinator.getPoolAllocation(connHash);
+        assertEquals(2, allocation.getHealthyServers());
+        assertEquals(10, allocation.getCurrentMaxPoolSize());
+        assertEquals(5, allocation.getCurrentMinIdle());
+    }
 }

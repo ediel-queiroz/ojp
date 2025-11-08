@@ -141,6 +141,12 @@ public class ConnectionPoolConfigurer {
      * Applies current pool allocation sizes to an existing HikariDataSource.
      * HikariCP supports dynamic resizing of pool sizes at runtime.
      * 
+     * Important notes on HikariCP pool reduction:
+     * - When reducing pool size, setMinimumIdle() must be called BEFORE setMaximumPoolSize()
+     *   to avoid validation errors (minIdle must be <= maxPoolSize)
+     * - HikariCP's softEvictConnections() helps release idle connections above the new minimumIdle
+     * - Connections are evicted gradually as they become idle, not immediately
+     * 
      * @param connHash Connection hash to look up pool allocation
      * @param dataSource HikariDataSource to update
      */
@@ -163,11 +169,37 @@ public class ConnectionPoolConfigurer {
             log.info("Resizing HikariCP pool for {}: maxPoolSize {} -> {}, minIdle {} -> {}", 
                     connHash, currentMaxPoolSize, newMaxPoolSize, currentMinIdle, newMinIdle);
             
-            // Apply new sizes - HikariCP supports dynamic resizing
-            dataSource.setMaximumPoolSize(newMaxPoolSize);
-            dataSource.setMinimumIdle(newMinIdle);
+            // Determine if we're increasing or decreasing pool sizes
+            boolean isIncreasing = (newMaxPoolSize > currentMaxPoolSize) || (newMinIdle > currentMinIdle);
+            boolean isDecreasing = (newMaxPoolSize < currentMaxPoolSize) || (newMinIdle < currentMinIdle);
             
-            log.info("Successfully resized HikariCP pool for {}", connHash);
+            if (isDecreasing) {
+                // When reducing: set minIdle first, then maxPoolSize
+                // This avoids HikariCP validation errors (minIdle <= maxPoolSize)
+                dataSource.setMinimumIdle(newMinIdle);
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                
+                // Trigger soft eviction to release idle connections above the new minimum
+                // This helps reduce the pool size more quickly by marking excess connections for closure
+                dataSource.getHikariPoolMXBean().softEvictConnections();
+                
+                log.info("Successfully resized (decreased) HikariCP pool for {}. Idle connections above {} will be evicted.", 
+                        connHash, newMinIdle);
+            } else if (isIncreasing) {
+                // When increasing: set maxPoolSize first, then minIdle
+                // This allows the pool to grow before setting the new minimum
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                dataSource.setMinimumIdle(newMinIdle);
+                
+                log.info("Successfully resized (increased) HikariCP pool for {}", connHash);
+            } else {
+                // Mixed case (one increasing, one decreasing) - be conservative
+                // Set minIdle first to avoid violations
+                dataSource.setMinimumIdle(newMinIdle);
+                dataSource.setMaximumPoolSize(newMaxPoolSize);
+                
+                log.info("Successfully resized HikariCP pool for {}", connHash);
+            }
         } else {
             log.debug("Pool sizes unchanged for {}, no resize needed", connHash);
         }
