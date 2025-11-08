@@ -39,6 +39,8 @@ public class MultinodeIntegrationTest {
     @BeforeAll
     public static void checkTestConfiguration() {
         isTestDisabled = !Boolean.parseBoolean(System.getProperty("multinodeTestsEnabled", "false"));
+        // Set connection pool minimumIdle for multinode test
+        System.setProperty("ojp.connection.pool.minimumIdle", "20");
     }
 
     @SneakyThrows
