@@ -165,7 +165,10 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         if (clusterHealth != null && !clusterHealth.isEmpty() && 
             connHash != null && !connHash.isEmpty()) {
             
-            ConnectionPoolConfigurer.processClusterHealth(connHash, clusterHealth, clusterHealthTracker);
+            // Get the HikariDataSource for this connection hash to enable dynamic resizing
+            HikariDataSource dataSource = datasourceMap.get(connHash);
+            
+            ConnectionPoolConfigurer.processClusterHealth(connHash, clusterHealth, clusterHealthTracker, dataSource);
         }
     }
 

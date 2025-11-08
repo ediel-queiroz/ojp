@@ -108,9 +108,11 @@ public class ConnectionPoolConfigurer {
      * @param connHash Connection hash
      * @param clusterHealth Cluster health string from client
      * @param clusterHealthTracker Tracker to detect health changes
+     * @param dataSource HikariDataSource to apply pool size changes to (can be null)
      */
     public static void processClusterHealth(String connHash, String clusterHealth, 
-                                           org.openjproxy.grpc.server.ClusterHealthTracker clusterHealthTracker) {
+                                           org.openjproxy.grpc.server.ClusterHealthTracker clusterHealthTracker,
+                                           com.zaxxer.hikari.HikariDataSource dataSource) {
         if (connHash == null || connHash.isEmpty() || clusterHealth == null || clusterHealth.isEmpty()) {
             return;
         }
@@ -128,8 +130,46 @@ public class ConnectionPoolConfigurer {
             // Update the pool coordinator with new healthy server count
             poolCoordinator.updateHealthyServers(connHash, healthyServerCount);
             
-            // Note: Actual pool resizing would happen in ConnectionAcquisitionManager
-            // when it detects the new pool allocation settings
+            // Apply new pool sizes to existing HikariDataSource if provided
+            if (dataSource != null) {
+                applyPoolSizeChanges(connHash, dataSource);
+            }
+        }
+    }
+    
+    /**
+     * Applies current pool allocation sizes to an existing HikariDataSource.
+     * HikariCP supports dynamic resizing of pool sizes at runtime.
+     * 
+     * @param connHash Connection hash to look up pool allocation
+     * @param dataSource HikariDataSource to update
+     */
+    public static void applyPoolSizeChanges(String connHash, com.zaxxer.hikari.HikariDataSource dataSource) {
+        MultinodePoolCoordinator.PoolAllocation allocation = poolCoordinator.getPoolAllocation(connHash);
+        
+        if (allocation == null) {
+            log.debug("No pool allocation found for {}, skipping pool resize", connHash);
+            return;
+        }
+        
+        int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
+        int newMinIdle = allocation.getCurrentMinIdle();
+        
+        // Get current sizes for logging
+        int currentMaxPoolSize = dataSource.getMaximumPoolSize();
+        int currentMinIdle = dataSource.getMinimumIdle();
+        
+        if (currentMaxPoolSize != newMaxPoolSize || currentMinIdle != newMinIdle) {
+            log.info("Resizing HikariCP pool for {}: maxPoolSize {} -> {}, minIdle {} -> {}", 
+                    connHash, currentMaxPoolSize, newMaxPoolSize, currentMinIdle, newMinIdle);
+            
+            // Apply new sizes - HikariCP supports dynamic resizing
+            dataSource.setMaximumPoolSize(newMaxPoolSize);
+            dataSource.setMinimumIdle(newMinIdle);
+            
+            log.info("Successfully resized HikariCP pool for {}", connHash);
+        } else {
+            log.debug("Pool sizes unchanged for {}, no resize needed", connHash);
         }
     }
 
