@@ -7,3 +7,6 @@
 
 # ignore Maven Shade Plugin generated files
 dependency-reduced-pom.xml
+
+# ignore temp directory for test logs
+temp/
