@@ -62,6 +62,7 @@ public class Driver implements java.sql.Driver {
         ServiceAndUrl serviceAndUrl = getOrCreateStatementService(cleanUrl);
         StatementService statementService = serviceAndUrl.service;
         String connectionUrl = serviceAndUrl.connectionUrl;
+        List<String> serverEndpoints = serviceAndUrl.serverEndpoints;
         
         // Load ojp.properties file and extract datasource-specific configuration
         Properties ojpProperties = loadOjpPropertiesForDataSource(dataSourceName);
@@ -71,6 +72,12 @@ public class Driver implements java.sql.Driver {
                 .setUser((String) ((info.get(USER) != null)? info.get(USER) : ""))
                 .setPassword((String) ((info.get(PASSWORD) != null) ? info.get(PASSWORD) : ""))
                 .setClientUUID(ClientUUID.getUUID());
+        
+        // Add server endpoints list for multinode coordination
+        if (serverEndpoints != null && !serverEndpoints.isEmpty()) {
+            connBuilder.addAllServerEndpoints(serverEndpoints);
+            log.info("Adding {} server endpoints to ConnectionDetails for multinode coordination", serverEndpoints.size());
+        }
         
         if (ojpProperties != null && !ojpProperties.isEmpty()) {
             // Convert Properties to Map<String, Object>
@@ -97,15 +104,17 @@ public class Driver implements java.sql.Driver {
     }
     
     /**
-     * Helper class to return both the service and the connection URL.
+     * Helper class to return the service, connection URL, and server endpoints.
      */
     private static class ServiceAndUrl {
         final StatementService service;
         final String connectionUrl;
+        final List<String> serverEndpoints;
         
-        ServiceAndUrl(StatementService service, String connectionUrl) {
+        ServiceAndUrl(StatementService service, String connectionUrl, List<String> serverEndpoints) {
             this.service = service;
             this.connectionUrl = connectionUrl;
+            this.serverEndpoints = serverEndpoints;
         }
     }
     
@@ -138,7 +147,12 @@ public class Driver implements java.sql.Driver {
                 // Use the original URL with the first endpoint for connection metadata
                 String connectionUrl = MultinodeUrlParser.replaceBracketsWithSingleEndpoint(url, endpoints.get(0));
                 
-                return new ServiceAndUrl(service, connectionUrl);
+                // Convert ServerEndpoint list to string list (host:port format)
+                List<String> serverEndpointStrings = endpoints.stream()
+                        .map(ep -> ep.getHost() + ":" + ep.getPort())
+                        .collect(java.util.stream.Collectors.toList());
+                
+                return new ServiceAndUrl(service, connectionUrl, serverEndpointStrings);
             } else {
                 // Single-node configuration - use traditional client
                 String cacheKey = "single:" + endpoints.get(0).getAddress();
@@ -147,7 +161,7 @@ public class Driver implements java.sql.Driver {
                     return new StatementServiceGrpcClient();
                 });
                 
-                return new ServiceAndUrl(service, url);
+                return new ServiceAndUrl(service, url, null);
             }
         } catch (IllegalArgumentException e) {
             // URL parsing failed, fall back to single-node client
@@ -157,7 +171,7 @@ public class Driver implements java.sql.Driver {
                 return new StatementServiceGrpcClient();
             });
             
-            return new ServiceAndUrl(service, url);
+            return new ServiceAndUrl(service, url, null);
         }
     }
     
