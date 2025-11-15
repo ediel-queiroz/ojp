@@ -21,6 +21,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Queue;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,6 +42,8 @@ public class MultinodeXAIntegrationTest {
     private static Queue<Long> queryDurations = new ConcurrentLinkedQueue<>();
     private static AtomicInteger totalQueries = new AtomicInteger(0);
     private static AtomicInteger failedQueries = new AtomicInteger(0);
+    private static ExecutorService queryExecutor = Executors.newFixedThreadPool(200);//More than enough
+
 
     private static AtomikosDataSourceBean xaDataSource;
 
@@ -175,16 +178,21 @@ public class MultinodeXAIntegrationTest {
     }
 
     private static void timeAndRun(Callable<Void> query) {
-        long start = System.nanoTime();
-        try {
-            query.call();
-        } catch (Exception e) {
-            failedQueries.incrementAndGet();
-            System.err.println("Query failed: " + e.getMessage() + " \n " + ExceptionUtils.getStackTrace(e));
-        }
-        long end = System.nanoTime();
-        queryDurations.add(end - start);
-        totalQueries.incrementAndGet();
+        //Run each query in a different thread because if not Atomikos reuses the same connection, avoiding balancing between servers.
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            long start = System.nanoTime();
+            try {
+                query.call();
+            } catch (Exception e) {
+                failedQueries.incrementAndGet();
+                System.err.println("Query failed: " + e.getMessage() + " \n " + ExceptionUtils.getStackTrace(e));
+            }
+            long end = System.nanoTime();
+            queryDurations.add(end - start);
+            totalQueries.incrementAndGet();
+        }, queryExecutor);
+        //Wait CompletableFuture to finish before proceeding
+        future.join();
     }
 
     @FunctionalInterface
