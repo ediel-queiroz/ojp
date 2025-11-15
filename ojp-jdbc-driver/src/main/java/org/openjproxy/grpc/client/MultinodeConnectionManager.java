@@ -107,6 +107,8 @@ public class MultinodeConnectionManager {
     public SessionInfo connect(ConnectionDetails connectionDetails) throws SQLException {
         boolean isXA = connectionDetails.getIsXA();
         
+        log.info("=== connect() called: isXA={} ===", isXA);
+        
         if (isXA) {
             // For XA connections, use round-robin to select a single server
             return connectToSingleServer(connectionDetails);
@@ -127,7 +129,8 @@ public class MultinodeConnectionManager {
             throw new SQLException("No healthy servers available for XA connection");
         }
         
-        log.info("XA connection: selected server {} via round-robin", selectedServer.getAddress());
+        log.info("===XA connection: selected server {} via round-robin (counter={}) ===", 
+                selectedServer.getAddress(), roundRobinCounter.get() - 1);
         
         try {
             ChannelAndStub channelAndStub = channelMap.get(selectedServer);
@@ -312,6 +315,11 @@ public class MultinodeConnectionManager {
         
         log.info("Looking up server for session: {}", sessionKey);
         ServerEndpoint sessionServer = sessionToServerMap.get(sessionKey);
+        
+        log.info("=== affinityServer lookup: sessionKey={}, found server={}, total sessions in map={} ===", 
+                sessionKey, 
+                sessionServer != null ? sessionServer.getAddress() : "NOT_FOUND",
+                sessionToServerMap.size());
         
         // Session must be bound - throw exception if not found
         if (sessionServer == null) {
