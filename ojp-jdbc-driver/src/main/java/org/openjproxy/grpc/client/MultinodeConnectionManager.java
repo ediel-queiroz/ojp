@@ -94,13 +94,100 @@ public class MultinodeConnectionManager {
     }
     
     /**
-     * Establishes a connection by calling connect() on ALL servers.
-     * This ensures all servers have the datasource information so that subsequent operations
-     * can be routed to any server via round-robin when no session is bound.
+     * Establishes a connection by calling connect() on servers.
      * 
-     * Returns the SessionInfo from the first successful connection.
+     * For XA connections (isXA=true): Uses round-robin to select ONE server to ensure
+     * proper load distribution and avoid creating orphaned sessions.
+     * 
+     * For non-XA connections: Connects to ALL servers to ensure all servers have the 
+     * datasource information so that subsequent operations can be routed to any server.
+     * 
+     * Returns the SessionInfo from the successful connection.
      */
     public SessionInfo connect(ConnectionDetails connectionDetails) throws SQLException {
+        boolean isXA = connectionDetails.getIsXA();
+        
+        if (isXA) {
+            // For XA connections, use round-robin to select a single server
+            return connectToSingleServer(connectionDetails);
+        } else {
+            // For non-XA connections, connect to all servers (existing behavior)
+            return connectToAllServers(connectionDetails);
+        }
+    }
+    
+    /**
+     * Connects to a single server using round-robin selection.
+     * Used for XA connections to ensure proper load distribution.
+     */
+    private SessionInfo connectToSingleServer(ConnectionDetails connectionDetails) throws SQLException {
+        ServerEndpoint selectedServer = selectHealthyServer();
+        
+        if (selectedServer == null) {
+            throw new SQLException("No healthy servers available for XA connection");
+        }
+        
+        log.info("XA connection: selected server {} via round-robin", selectedServer.getAddress());
+        
+        try {
+            ChannelAndStub channelAndStub = channelMap.get(selectedServer);
+            if (channelAndStub == null) {
+                channelAndStub = createChannelAndStub(selectedServer);
+            }
+            
+            log.info("Connecting to server {} (XA)", selectedServer.getAddress());
+            SessionInfo sessionInfo = channelAndStub.blockingStub.connect(connectionDetails);
+            
+            // Mark server as healthy
+            selectedServer.setHealthy(true);
+            selectedServer.setLastFailureTime(0);
+            
+            // Bind session to this server
+            if (sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) {
+                String targetServer = sessionInfo.getTargetServer();
+                if (targetServer != null && !targetServer.isEmpty()) {
+                    bindSession(sessionInfo.getSessionUUID(), targetServer);
+                    log.info("XA session {} bound to target server {} (from response)", 
+                            sessionInfo.getSessionUUID(), targetServer);
+                } else {
+                    String serverAddress = selectedServer.getHost() + ":" + selectedServer.getPort();
+                    sessionToServerMap.put(sessionInfo.getSessionUUID(), selectedServer);
+                    log.info("XA session {} bound to server {} (fallback)", 
+                            sessionInfo.getSessionUUID(), serverAddress);
+                }
+            }
+            
+            // Track the server for this connection hash
+            if (sessionInfo.getConnHash() != null && !sessionInfo.getConnHash().isEmpty()) {
+                List<ServerEndpoint> connectedServers = new ArrayList<>();
+                connectedServers.add(selectedServer);
+                connHashToServersMap.put(sessionInfo.getConnHash(), connectedServers);
+                log.info("Tracked 1 server for XA connection hash {}", sessionInfo.getConnHash());
+            }
+            
+            log.info("Successfully connected to server {} (XA)", selectedServer.getAddress());
+            return sessionInfo;
+            
+        } catch (StatusRuntimeException e) {
+            SQLException sqlEx;
+            try {
+                throw GrpcExceptionHandler.handle(e);
+            } catch (SQLException ex) {
+                sqlEx = ex;
+            }
+            handleServerFailure(selectedServer, e);
+            
+            log.error("XA connection failed to server {}: {}", 
+                    selectedServer.getAddress(), sqlEx.getMessage());
+            throw sqlEx;
+        }
+    }
+    
+    /**
+     * Connects to all servers to ensure datasource information is available on all nodes.
+     * Used for non-XA connections.
+     */
+    private SessionInfo connectToAllServers(ConnectionDetails connectionDetails) throws SQLException {
         SessionInfo primarySessionInfo = null;
         SQLException lastException = null;
         int successfulConnections = 0;
@@ -225,7 +312,6 @@ public class MultinodeConnectionManager {
         
         log.info("Looking up server for session: {}", sessionKey);
         ServerEndpoint sessionServer = sessionToServerMap.get(sessionKey);
-        //TODO the sessionToServerMap has sessions associated with both servers but somehow only one (10591) seems to be receiving requests.
         
         // Session must be bound - throw exception if not found
         if (sessionServer == null) {
