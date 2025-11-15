@@ -150,13 +150,13 @@ public class MultinodeConnectionManager {
                 String targetServer = sessionInfo.getTargetServer();
                 if (targetServer != null && !targetServer.isEmpty()) {
                     bindSession(sessionInfo.getSessionUUID(), targetServer);
-                    log.info("XA session {} bound to target server {} (from response)", 
+                    log.info("=== XA session {} bound to target server {} (from response) ===", 
                             sessionInfo.getSessionUUID(), targetServer);
                 } else {
                     String serverAddress = selectedServer.getHost() + ":" + selectedServer.getPort();
                     sessionToServerMap.put(sessionInfo.getSessionUUID(), selectedServer);
-                    log.info("XA session {} bound to server {} (fallback)", 
-                            sessionInfo.getSessionUUID(), serverAddress);
+                    log.info("=== XA session {} bound to server {} (fallback) - Map size now: {} ===", 
+                            sessionInfo.getSessionUUID(), serverAddress, sessionToServerMap.size());
                 }
             }
             
@@ -320,6 +320,15 @@ public class MultinodeConnectionManager {
                 sessionKey, 
                 sessionServer != null ? sessionServer.getAddress() : "NOT_FOUND",
                 sessionToServerMap.size());
+        
+        // Log session distribution for debugging
+        if (sessionServer != null && log.isDebugEnabled()) {
+            Map<String, Long> serverDistribution = sessionToServerMap.values().stream()
+                    .collect(java.util.stream.Collectors.groupingBy(
+                            ServerEndpoint::getAddress,
+                            java.util.stream.Collectors.counting()));
+            log.debug("Session distribution across servers: {}", serverDistribution);
+        }
         
         // Session must be bound - throw exception if not found
         if (sessionServer == null) {
