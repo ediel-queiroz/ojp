@@ -225,6 +225,7 @@ public class MultinodeConnectionManager {
         
         log.info("Looking up server for session: {}", sessionKey);
         ServerEndpoint sessionServer = sessionToServerMap.get(sessionKey);
+        //TODO the sessionToServerMap has sessions associated with both servers but somehow only one (10591) seems to be receiving requests.
         
         // Session must be bound - throw exception if not found
         if (sessionServer == null) {

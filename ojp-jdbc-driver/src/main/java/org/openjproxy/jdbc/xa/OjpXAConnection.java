@@ -1,6 +1,5 @@
 package org.openjproxy.jdbc.xa;
 
-import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -39,15 +38,17 @@ public class OjpXAConnection implements XAConnection {
     private Connection logicalConnection;
     private OjpXAResource xaResource;
     private boolean closed = false;
+    private List<String> serverEndpoints;
     private final List<ConnectionEventListener> listeners = new ArrayList<>();
 
-    public OjpXAConnection(StatementService statementService, String url, String user, String password, Properties properties) {
+    public OjpXAConnection(StatementService statementService, String url, String user, String password, Properties properties, List<String> serverEndpoints) {
         log.debug("Creating OjpXAConnection for URL: {}", url);
         this.statementService = statementService;
         this.url = url;
         this.user = user;
         this.password = password;
         this.properties = properties;
+        this.serverEndpoints = serverEndpoints;
         // Session is created lazily when needed
     }
     
@@ -68,7 +69,13 @@ public class OjpXAConnection implements XAConnection {
                     .setPassword(password != null ? password : "")
                     .setClientUUID(ClientUUID.getUUID())
                     .setIsXA(true);  // Mark this as an XA connection
-            
+
+            // Add server endpoints list for multinode coordination
+            if (serverEndpoints != null && !serverEndpoints.isEmpty()) {
+                connBuilder.addAllServerEndpoints(serverEndpoints);
+                log.info("Adding {} server endpoints to ConnectionDetails for multinode coordination", serverEndpoints.size());
+            }
+
             if (properties != null && !properties.isEmpty()) {
                 Map<String, Object> propertiesMap = new HashMap<>();
                 for (String key : properties.stringPropertyNames()) {
@@ -185,23 +192,6 @@ public class OjpXAConnection implements XAConnection {
     public void removeStatementEventListener(javax.sql.StatementEventListener listener) {
         log.debug("removeStatementEventListener called - not supported");
         // Not supported for XA connections
-    }
-
-    /**
-     * Notify listeners of a connection error.
-     */
-    void notifyError(SQLException exception) {
-        ConnectionEvent event = new ConnectionEvent(this, exception);
-        for (ConnectionEventListener listener : listeners) {
-            listener.connectionErrorOccurred(event);
-        }
-    }
-
-    /**
-     * Get the session info for this XA connection.
-     */
-    SessionInfo getSessionInfo() {
-        return sessionInfo;
     }
 
     private void checkClosed() throws SQLException {

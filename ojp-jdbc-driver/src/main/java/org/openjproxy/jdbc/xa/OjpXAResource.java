@@ -18,7 +18,6 @@ public class OjpXAResource implements XAResource {
 
     private final StatementService statementService;
     private final SessionInfo sessionInfo;
-    private int transactionTimeout = 0;
 
     public OjpXAResource(StatementService statementService, SessionInfo sessionInfo) {
         this.statementService = statementService;
@@ -185,9 +184,6 @@ public class OjpXAResource implements XAResource {
                     .setSeconds(seconds)
                     .build();
             XaSetTransactionTimeoutResponse response = statementService.xaSetTransactionTimeout(request);
-            if (response.getSuccess()) {
-                this.transactionTimeout = seconds;
-            }
             return response.getSuccess();
         } catch (Exception e) {
             log.error("Error in setTransactionTimeout", e);

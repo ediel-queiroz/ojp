@@ -1,11 +1,10 @@
 package org.openjproxy.jdbc.xa;
 
-import com.google.protobuf.ByteString;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.client.MultinodeUrlParser;
 import org.openjproxy.grpc.client.StatementService;
-import org.openjproxy.grpc.client.StatementServiceGrpcClient;
 import org.openjproxy.jdbc.UrlParser;
 
 import javax.sql.XAConnection;
@@ -15,6 +14,7 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.util.List;
 import java.util.Properties;
 import java.util.logging.Logger;
 
@@ -54,6 +54,7 @@ public class OjpXADataSource implements XADataSource {
     // Parsed URL information
     private String cleanUrl;
     private String dataSourceName;
+    private List<String> serverEndpoints;
 
     public OjpXADataSource() {
         log.debug("Creating OjpXADataSource");
@@ -86,7 +87,7 @@ public class OjpXADataSource implements XADataSource {
         this.dataSourceName = urlParseResult.dataSourceName;
         
         log.debug("Parsed URL - clean: {}, dataSource: {}", cleanUrl, dataSourceName);
-        
+
         // Load ojp.properties file and extract datasource-specific configuration
         Properties ojpProperties = loadOjpPropertiesForDataSource(dataSourceName);
         if (ojpProperties != null && !ojpProperties.isEmpty()) {
@@ -101,8 +102,12 @@ public class OjpXADataSource implements XADataSource {
         
         // Initialize StatementService - this will open the GRPC channel on first use
         log.debug("Initializing StatementServiceGrpcClient for XA datasource: {}", dataSourceName);
-        statementService = new StatementServiceGrpcClient();
-        
+
+        // Detect multinode vs single-node configuration and get the URL to use for connection
+        MultinodeUrlParser.ServiceAndUrl serviceAndUrl = MultinodeUrlParser.getOrCreateStatementService(cleanUrl);
+        statementService = serviceAndUrl.getService();
+        this.serverEndpoints = serviceAndUrl.getServerEndpoints();
+
         // The GRPC channel will be opened lazily on the first connect() call
         // Since this StatementService instance is shared by all XA connections from this datasource,
         // the channel is opened once and reused
@@ -191,7 +196,7 @@ public class OjpXADataSource implements XADataSource {
         // Create XA connection using the shared StatementService
         // The GRPC channel is already open and will be reused
         // The session will be created lazily when first needed
-        return new OjpXAConnection(statementService, cleanUrl, username, password, properties);
+        return new OjpXAConnection(statementService, cleanUrl, username, password, properties, serverEndpoints);
     }
 
     @Override
