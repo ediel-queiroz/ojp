@@ -1,8 +1,8 @@
 
 # Open J Proxy
 
-[![License](https://img.shields.io/github/license/Open-J-Proxy/ojp.svg)](https://raw.githubusercontent.com/Open-J-Proxy/ojp/master/LICENSE)
 ![Release](https://img.shields.io/github/v/release/Open-J-Proxy/ojp?include_prereleases)
+[![License](https://img.shields.io/github/license/Open-J-Proxy/ojp.svg)](https://raw.githubusercontent.com/Open-J-Proxy/ojp/master/LICENSE)
 [![Main CI](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml)
 [![Multinode Integration Tests](https://github.com/Open-J-Proxy/ojp/actions/workflows/multinode-integration.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp/actions/workflows/multinode-integration.yml)
 [![Spring Boot/Micronaut/Quarkus Integration](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml)
