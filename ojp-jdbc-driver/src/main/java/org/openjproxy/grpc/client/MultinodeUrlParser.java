@@ -31,18 +31,20 @@ public class MultinodeUrlParser {
 
 
     /**
-     * Helper class to return the service, connection URL, and server endpoints.
+     * Helper class to return the service, connection URL, server endpoints, and datasource names.
      */
     @Getter
     public static class ServiceAndUrl {
         final StatementService service;
         final String connectionUrl;
         final List<String> serverEndpoints;
+        final List<ServerEndpoint> serverEndpointsWithDatasources;
 
-        ServiceAndUrl(StatementService service, String connectionUrl, List<String> serverEndpoints) {
+        ServiceAndUrl(StatementService service, String connectionUrl, List<String> serverEndpoints, List<ServerEndpoint> serverEndpointsWithDatasources) {
             this.service = service;
             this.connectionUrl = connectionUrl;
             this.serverEndpoints = serverEndpoints;
+            this.serverEndpointsWithDatasources = serverEndpointsWithDatasources;
         }
     }
 
@@ -51,11 +53,14 @@ public class MultinodeUrlParser {
      * Returns both the service and the connection URL (which may be modified for multinode).
      * For multinode URLs, creates a MultinodeStatementService with load balancing and failover.
      * For single-node URLs, creates a StatementServiceGrpcClient.
+     * 
+     * @param url the JDBC URL (should be already cleaned of datasource names)
+     * @param dataSourceNames optional list of datasource names corresponding to each endpoint
      */
-    public synchronized static ServiceAndUrl getOrCreateStatementService(String url) {
+    public synchronized static ServiceAndUrl getOrCreateStatementService(String url, List<String> dataSourceNames) {
         try {
             // Try to parse as multinode URL
-            List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url);
+            List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url, dataSourceNames);
 
             if (endpoints.size() > 1) {
                 // Multinode configuration detected - use MultinodeStatementService
@@ -80,7 +85,7 @@ public class MultinodeUrlParser {
                         .map(ep -> ep.getHost() + ":" + ep.getPort())
                         .collect(java.util.stream.Collectors.toList());
 
-                return new ServiceAndUrl(service, connectionUrl, serverEndpointStrings);
+                return new ServiceAndUrl(service, connectionUrl, serverEndpointStrings, endpoints);
             } else {
                 // Single-node configuration - use traditional client
                 String cacheKey = "single:" + endpoints.get(0).getAddress();
@@ -89,7 +94,7 @@ public class MultinodeUrlParser {
                     return new StatementServiceGrpcClient();
                 });
 
-                return new ServiceAndUrl(service, url, null);
+                return new ServiceAndUrl(service, url, null, endpoints);
             }
         } catch (IllegalArgumentException e) {
             // URL parsing failed, fall back to single-node client
@@ -99,18 +104,27 @@ public class MultinodeUrlParser {
                 return new StatementServiceGrpcClient();
             });
 
-            return new ServiceAndUrl(service, url, null);
+            return new ServiceAndUrl(service, url, null, null);
         }
+    }
+
+    /**
+     * Gets or creates a StatementService implementation based on the URL.
+     * Backward compatibility method without datasource names.
+     */
+    public synchronized static ServiceAndUrl getOrCreateStatementService(String url) {
+        return getOrCreateStatementService(url, null);
     }
 
     /**
      * Parses an OJP URL and extracts server endpoints.
      * 
      * @param url The OJP JDBC URL to parse
+     * @param dataSourceNames Optional list of datasource names corresponding to each endpoint
      * @return List of server endpoints
      * @throws IllegalArgumentException if URL format is invalid
      */
-    public static List<ServerEndpoint> parseServerEndpoints(String url) {
+    public static List<ServerEndpoint> parseServerEndpoints(String url, List<String> dataSourceNames) {
         if (url == null) {
             throw new IllegalArgumentException("URL cannot be null");
         }
@@ -126,8 +140,8 @@ public class MultinodeUrlParser {
         // Split by comma to support multinode
         String[] serverAddresses = serverListString.split(",");
 
-        for (String address : serverAddresses) {
-            address = address.trim();
+        for (int i = 0; i < serverAddresses.length; i++) {
+            String address = serverAddresses[i].trim();
             if (address.isEmpty()) {
                 continue;
             }
@@ -149,7 +163,12 @@ public class MultinodeUrlParser {
                 throw new IllegalArgumentException("Port number must be between 1 and 65535. Got: " + port);
             }
 
-            endpoints.add(new ServerEndpoint(host, port));
+            // Get datasource name for this endpoint if provided
+            String dataSourceName = (dataSourceNames != null && i < dataSourceNames.size()) 
+                ? dataSourceNames.get(i) 
+                : "default";
+
+            endpoints.add(new ServerEndpoint(host, port, dataSourceName));
         }
 
         if (endpoints.isEmpty()) {
@@ -157,9 +176,21 @@ public class MultinodeUrlParser {
         }
 
         log.debug("Parsed {} server endpoints from URL: {}", endpoints.size(),
-                endpoints.stream().map(ServerEndpoint::getAddress).collect(Collectors.toList()));
+                endpoints.stream().map(ep -> ep.getAddress() + "(" + ep.getDataSourceName() + ")").collect(Collectors.toList()));
 
         return endpoints;
+    }
+
+    /**
+     * Parses an OJP URL and extracts server endpoints.
+     * Backward compatibility method without datasource names.
+     * 
+     * @param url The OJP JDBC URL to parse
+     * @return List of server endpoints
+     * @throws IllegalArgumentException if URL format is invalid
+     */
+    public static List<ServerEndpoint> parseServerEndpoints(String url) {
+        return parseServerEndpoints(url, null);
     }
 
     /**
