@@ -48,18 +48,39 @@ public class Driver implements java.sql.Driver {
     public java.sql.Connection connect(String url, Properties info) throws SQLException {
         log.debug("connect: url={}, info={}", url, info);
         
-        // Parse URL to extract dataSource name and clean URL
+        // Parse URL to extract dataSource name(s) and clean URL
         UrlParser.UrlParseResult urlParseResult = UrlParser.parseUrlWithDataSource(url);
         String cleanUrl = urlParseResult.cleanUrl;
         String dataSourceName = urlParseResult.dataSourceName;
+        List<String> dataSourceNames = urlParseResult.dataSourceNames;
         
-        log.debug("Parsed URL - clean: {}, dataSource: {}", cleanUrl, dataSourceName);
+        log.debug("Parsed URL - clean: {}, dataSource: {}, dataSources: {}", cleanUrl, dataSourceName, dataSourceNames);
         
         // Detect multinode vs single-node configuration and get the URL to use for connection
-        MultinodeUrlParser.ServiceAndUrl serviceAndUrl = MultinodeUrlParser.getOrCreateStatementService(cleanUrl);
+        MultinodeUrlParser.ServiceAndUrl serviceAndUrl = MultinodeUrlParser.getOrCreateStatementService(cleanUrl, dataSourceNames);
         StatementService statementService = serviceAndUrl.getService();
         String connectionUrl = serviceAndUrl.getConnectionUrl();
         List<String> serverEndpoints = serviceAndUrl.getServerEndpoints();
+        List<ServerEndpoint> serverEndpointsWithDatasources = serviceAndUrl.getServerEndpointsWithDatasources();
+        
+        // For multinode with per-endpoint datasources, we need to handle connection differently
+        // For now, we'll use the first datasource for the initial connection setup
+        // TODO: Enhance to support per-endpoint configuration passing to servers
+        if (serverEndpointsWithDatasources != null && serverEndpointsWithDatasources.size() > 1) {
+            boolean hasMultipleDatasources = serverEndpointsWithDatasources.stream()
+                .map(ServerEndpoint::getDataSourceName)
+                .distinct()
+                .count() > 1;
+            
+            if (hasMultipleDatasources) {
+                log.warn("Per-endpoint datasources detected. Currently using first datasource '{}' for connection properties. " +
+                        "Per-server configuration will be applied based on server endpoint datasource names: {}", 
+                        dataSourceName,
+                        serverEndpointsWithDatasources.stream()
+                            .map(ep -> ep.getAddress() + "=" + ep.getDataSourceName())
+                            .collect(java.util.stream.Collectors.joining(", ")));
+            }
+        }
         
         // Load ojp.properties file and extract datasource-specific configuration
         Properties ojpProperties = loadOjpPropertiesForDataSource(dataSourceName);

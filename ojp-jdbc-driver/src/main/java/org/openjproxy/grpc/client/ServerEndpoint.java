@@ -9,15 +9,21 @@ import java.util.Objects;
 public class ServerEndpoint {
     private final String host;
     private final int port;
+    private final String dataSourceName;
     private volatile boolean healthy = true;
     private volatile long lastFailureTime = 0;
 
     public ServerEndpoint(String host, int port) {
+        this(host, port, "default");
+    }
+
+    public ServerEndpoint(String host, int port, String dataSourceName) {
         this.host = Objects.requireNonNull(host, "Host cannot be null");
         if (port <= 0 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 1 and 65535, got: " + port);
         }
         this.port = port;
+        this.dataSourceName = dataSourceName != null ? dataSourceName : "default";
     }
 
     public String getHost() {
@@ -26,6 +32,10 @@ public class ServerEndpoint {
 
     public int getPort() {
         return port;
+    }
+
+    public String getDataSourceName() {
+        return dataSourceName;
     }
 
     public String getAddress() {
