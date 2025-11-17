@@ -69,6 +69,15 @@ public class Connection implements java.sql.Connection {
     }
     
     /**
+     * Checks if this connection has been marked for forced invalidation.
+     * 
+     * @return true if marked invalid, false otherwise
+     */
+    public boolean isForceInvalid() {
+        return this.forceInvalid;
+    }
+    
+    /**
      * Checks if connection is valid before executing operations.
      * Throws SQLNonTransientConnectionException with SQLState 08006 if invalid.
      * 
@@ -89,7 +98,6 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.Statement createStatement() throws SQLException {
         log.debug("createStatement called");
-        checkValid();
         checkValid();
         return new Statement(this, statementService);
     }
