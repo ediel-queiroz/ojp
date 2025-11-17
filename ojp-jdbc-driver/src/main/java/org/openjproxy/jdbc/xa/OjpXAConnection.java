@@ -163,7 +163,39 @@ public class OjpXAConnection implements XAConnection, ServerHealthListener {
         
         // Create a new logical connection that uses the same XA session on the server
         logicalConnection = new OjpXALogicalConnection(this, session, url);
+        
+        // Register with ConnectionTracker if using multinode
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null && boundServerAddress != null) {
+                // Find the ServerEndpoint for the bound server
+                ServerEndpoint boundEndpoint = findServerEndpoint(connectionManager, boundServerAddress);
+                if (boundEndpoint != null) {
+                    connectionManager.getConnectionTracker().register(logicalConnection, boundEndpoint);
+                    log.debug("Registered connection with tracker for server: {}", boundServerAddress);
+                }
+            }
+        }
+        
         return logicalConnection;
+    }
+    
+    /**
+     * Find the ServerEndpoint matching the bound server address.
+     */
+    private ServerEndpoint findServerEndpoint(MultinodeConnectionManager connectionManager, String serverAddress) {
+        try {
+            // The connectionManager has access to all server endpoints
+            // We need to find the one matching our boundServerAddress
+            // For now, return null as we don't have direct access to the endpoint list
+            // This will be enhanced in Phase 4
+            log.debug("Finding server endpoint for address: {}", serverAddress);
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to find server endpoint for {}: {}", serverAddress, e.getMessage());
+            return null;
+        }
     }
     
     /**
@@ -181,6 +213,16 @@ public class OjpXAConnection implements XAConnection, ServerHealthListener {
         }
         
         closed = true;
+        
+        // Unregister from ConnectionTracker if registered
+        if (logicalConnection != null && statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null) {
+                connectionManager.getConnectionTracker().unregister(logicalConnection);
+                log.debug("Unregistered connection from tracker");
+            }
+        }
         
         // Close logical connection if open
         if (logicalConnection != null && !logicalConnection.isClosed()) {
