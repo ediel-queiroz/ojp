@@ -1,0 +1,160 @@
+package org.openjproxy.grpc.client;
+
+import org.openjproxy.constants.CommonConstants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Properties;
+
+/**
+ * Configuration for health check and connection redistribution in multinode deployments.
+ * Loads settings from ojp.properties.
+ */
+public class HealthCheckConfig {
+    
+    private static final Logger log = LoggerFactory.getLogger(HealthCheckConfig.class);
+    
+    // Default values
+    private static final long DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30000L; // 30 seconds
+    private static final long DEFAULT_HEALTH_CHECK_THRESHOLD_MS = 30000L; // 30 seconds
+    private static final int DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 5000; // 5 seconds
+    private static final String DEFAULT_HEALTH_CHECK_QUERY = "SELECT 1";
+    private static final boolean DEFAULT_REDISTRIBUTION_ENABLED = true;
+    
+    // Property keys
+    private static final String PROP_HEALTH_CHECK_INTERVAL = "ojp.health.check.interval";
+    private static final String PROP_HEALTH_CHECK_THRESHOLD = "ojp.health.check.threshold";
+    private static final String PROP_HEALTH_CHECK_TIMEOUT = "ojp.health.check.timeout";
+    private static final String PROP_HEALTH_CHECK_QUERY = "ojp.health.check.query";
+    private static final String PROP_REDISTRIBUTION_ENABLED = "ojp.redistribution.enabled";
+    
+    private final long healthCheckIntervalMs;
+    private final long healthCheckThresholdMs;
+    private final int healthCheckTimeoutMs;
+    private final String healthCheckQuery;
+    private final boolean redistributionEnabled;
+    
+    private HealthCheckConfig(long healthCheckIntervalMs, long healthCheckThresholdMs,
+                            int healthCheckTimeoutMs, String healthCheckQuery,
+                            boolean redistributionEnabled) {
+        this.healthCheckIntervalMs = healthCheckIntervalMs;
+        this.healthCheckThresholdMs = healthCheckThresholdMs;
+        this.healthCheckTimeoutMs = healthCheckTimeoutMs;
+        this.healthCheckQuery = healthCheckQuery;
+        this.redistributionEnabled = redistributionEnabled;
+    }
+    
+    /**
+     * Loads health check configuration from properties.
+     * 
+     * @param props Properties to load from (typically from ojp.properties)
+     * @return HealthCheckConfig instance with loaded or default values
+     */
+    public static HealthCheckConfig loadFromProperties(Properties props) {
+        if (props == null) {
+            log.debug("No properties provided, using default health check configuration");
+            return createDefault();
+        }
+        
+        long interval = getLongProperty(props, PROP_HEALTH_CHECK_INTERVAL, DEFAULT_HEALTH_CHECK_INTERVAL_MS);
+        long threshold = getLongProperty(props, PROP_HEALTH_CHECK_THRESHOLD, DEFAULT_HEALTH_CHECK_THRESHOLD_MS);
+        int timeout = getIntProperty(props, PROP_HEALTH_CHECK_TIMEOUT, DEFAULT_HEALTH_CHECK_TIMEOUT_MS);
+        String query = props.getProperty(PROP_HEALTH_CHECK_QUERY, DEFAULT_HEALTH_CHECK_QUERY);
+        boolean enabled = getBooleanProperty(props, PROP_REDISTRIBUTION_ENABLED, DEFAULT_REDISTRIBUTION_ENABLED);
+        
+        log.info("Health check configuration loaded: interval={}ms, threshold={}ms, timeout={}ms, enabled={}", 
+                interval, threshold, timeout, enabled);
+        
+        return new HealthCheckConfig(interval, threshold, timeout, query, enabled);
+    }
+    
+    /**
+     * Creates a configuration with default values.
+     * 
+     * @return HealthCheckConfig instance with default values
+     */
+    public static HealthCheckConfig createDefault() {
+        return new HealthCheckConfig(
+            DEFAULT_HEALTH_CHECK_INTERVAL_MS,
+            DEFAULT_HEALTH_CHECK_THRESHOLD_MS,
+            DEFAULT_HEALTH_CHECK_TIMEOUT_MS,
+            DEFAULT_HEALTH_CHECK_QUERY,
+            DEFAULT_REDISTRIBUTION_ENABLED
+        );
+    }
+    
+    private static long getLongProperty(Properties props, String key, long defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            long longValue = Long.parseLong(value.trim());
+            if (longValue < 0) {
+                log.warn("Invalid negative value for {}: {}, using default: {}", key, value, defaultValue);
+                return defaultValue;
+            }
+            return longValue;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid value for {}: {}, using default: {}", key, value, defaultValue);
+            return defaultValue;
+        }
+    }
+    
+    private static int getIntProperty(Properties props, String key, int defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            int intValue = Integer.parseInt(value.trim());
+            if (intValue < 0) {
+                log.warn("Invalid negative value for {}: {}, using default: {}", key, value, defaultValue);
+                return defaultValue;
+            }
+            return intValue;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid value for {}: {}, using default: {}", key, value, defaultValue);
+            return defaultValue;
+        }
+    }
+    
+    private static boolean getBooleanProperty(Properties props, String key, boolean defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
+    }
+    
+    public long getHealthCheckIntervalMs() {
+        return healthCheckIntervalMs;
+    }
+    
+    public long getHealthCheckThresholdMs() {
+        return healthCheckThresholdMs;
+    }
+    
+    public int getHealthCheckTimeoutMs() {
+        return healthCheckTimeoutMs;
+    }
+    
+    public String getHealthCheckQuery() {
+        return healthCheckQuery;
+    }
+    
+    public boolean isRedistributionEnabled() {
+        return redistributionEnabled;
+    }
+    
+    @Override
+    public String toString() {
+        return "HealthCheckConfig{" +
+                "intervalMs=" + healthCheckIntervalMs +
+                ", thresholdMs=" + healthCheckThresholdMs +
+                ", timeoutMs=" + healthCheckTimeoutMs +
+                ", query='" + healthCheckQuery + '\'' +
+                ", enabled=" + redistributionEnabled +
+                '}';
+    }
+}
