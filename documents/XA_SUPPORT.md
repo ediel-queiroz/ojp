@@ -267,6 +267,17 @@ Future enhancements may include complete working examples for:
 - Integration with specific JTA transaction managers
 - Recovery scenarios
 
+## Multinode Deployments
+
+For XA transactions in multinode OJP deployments, see:
+- [XA_MULTINODE_FAILOVER.md](XA_MULTINODE_FAILOVER.md) - Automatic retry and failover for multinode XA deployments
+
+Features include:
+- Automatic retry of failed `xaStart()` operations
+- Proactive connection cleanup when servers fail
+- Load balancing across healthy servers
+- Respects XA transaction boundaries for safety
+
 ## API Reference
 
 Complete JavaDoc API documentation is available in the generated documentation:
