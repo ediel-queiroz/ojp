@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
@@ -40,13 +41,23 @@ public class MultinodeConnectionManager {
     private final long retryDelayMs;
     private final List<ServerHealthListener> healthListeners; // Phase 2: Listeners for server health changes
     
+    // Health check and redistribution support
+    private final HealthCheckConfig healthCheckConfig;
+    private final AtomicLong lastHealthCheckTimestamp;
+    
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints) {
         this(serverEndpoints, CommonConstants.DEFAULT_MULTINODE_RETRY_ATTEMPTS, 
-             CommonConstants.DEFAULT_MULTINODE_RETRY_DELAY_MS);
+             CommonConstants.DEFAULT_MULTINODE_RETRY_DELAY_MS, null);
     }
     
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints, 
                                     int retryAttempts, long retryDelayMs) {
+        this(serverEndpoints, retryAttempts, retryDelayMs, null);
+    }
+    
+    public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints, 
+                                    int retryAttempts, long retryDelayMs,
+                                    HealthCheckConfig healthCheckConfig) {
         if (serverEndpoints == null || serverEndpoints.isEmpty()) {
             throw new IllegalArgumentException("Server endpoints list cannot be null or empty");
         }
@@ -59,12 +70,14 @@ public class MultinodeConnectionManager {
         this.retryAttempts = retryAttempts;
         this.retryDelayMs = retryDelayMs;
         this.healthListeners = new ArrayList<>(); // Phase 2: Initialize listener list
+        this.healthCheckConfig = healthCheckConfig != null ? healthCheckConfig : HealthCheckConfig.createDefault();
+        this.lastHealthCheckTimestamp = new AtomicLong(0);
         
         // Initialize channels and stubs for all servers
         initializeConnections();
         
-        log.info("MultinodeConnectionManager initialized with {} servers: {}", 
-                serverEndpoints.size(), serverEndpoints);
+        log.info("MultinodeConnectionManager initialized with {} servers: {}, health check config: {}", 
+                serverEndpoints.size(), serverEndpoints, this.healthCheckConfig);
     }
     
     private void initializeConnections() {
@@ -111,6 +124,11 @@ public class MultinodeConnectionManager {
         
         log.info("=== connect() called: isXA={} ===", isXA);
         
+        // Try to trigger health check (time-based, non-blocking)
+        if (healthCheckConfig.isRedistributionEnabled()) {
+            tryTriggerHealthCheck();
+        }
+        
         if (isXA) {
             // For XA connections, use round-robin to select a single server
             return connectToSingleServer(connectionDetails);
@@ -118,6 +136,78 @@ public class MultinodeConnectionManager {
             // For non-XA connections, connect to all servers (existing behavior)
             return connectToAllServers(connectionDetails);
         }
+    }
+    
+    /**
+     * Attempts to trigger a health check if enough time has elapsed since the last check.
+     * Uses compareAndSet to ensure only one thread executes the health check.
+     * Non-blocking - if another thread is already doing a health check, this returns immediately.
+     */
+    private void tryTriggerHealthCheck() {
+        long now = System.currentTimeMillis();
+        long lastCheck = lastHealthCheckTimestamp.get();
+        long elapsed = now - lastCheck;
+        
+        // Only check if interval has passed
+        if (elapsed >= healthCheckConfig.getHealthCheckIntervalMs()) {
+            // Atomic update - only one thread succeeds
+            if (lastHealthCheckTimestamp.compareAndSet(lastCheck, now)) {
+                try {
+                    performHealthCheck();
+                } catch (Exception e) {
+                    log.warn("Health check failed: {}", e.getMessage());
+                    // Don't fail the connection attempt - health check is best effort
+                }
+            }
+        }
+    }
+    
+    /**
+     * Performs health check on unhealthy servers.
+     * If any servers have recovered, notifies listeners.
+     */
+    private void performHealthCheck() {
+        log.debug("Performing health check on unhealthy servers");
+        
+        List<ServerEndpoint> unhealthyServers = serverEndpoints.stream()
+                .filter(endpoint -> !endpoint.isHealthy())
+                .collect(Collectors.toList());
+        
+        if (unhealthyServers.isEmpty()) {
+            log.debug("No unhealthy servers to check");
+            return;
+        }
+        
+        log.info("Checking {} unhealthy server(s)", unhealthyServers.size());
+        
+        // Check each unhealthy server
+        for (ServerEndpoint endpoint : unhealthyServers) {
+            long timeSinceFailure = System.currentTimeMillis() - endpoint.getLastFailureTime();
+            
+            // Only check if enough time has passed since last failure
+            if (timeSinceFailure >= healthCheckConfig.getHealthCheckThresholdMs()) {
+                if (validateServer(endpoint)) {
+                    log.info("Server {} has recovered", endpoint.getAddress());
+                    endpoint.markHealthy();
+                    notifyServerRecovered(endpoint);
+                } else {
+                    // Still unhealthy, update timestamp
+                    endpoint.setLastFailureTime(System.currentTimeMillis());
+                    log.debug("Server {} still unhealthy", endpoint.getAddress());
+                }
+            }
+        }
+    }
+    
+    /**
+     * Validates if a server is healthy by attempting a simple connection.
+     * Returns true if server is responsive, false otherwise.
+     */
+    private boolean validateServer(ServerEndpoint endpoint) {
+        // TODO: Phase 2 - Implement actual validation with direct connection + health query
+        // For now, just return false (conservative approach)
+        log.debug("Validation not yet implemented for {}", endpoint.getAddress());
+        return false;
     }
     
     /**
