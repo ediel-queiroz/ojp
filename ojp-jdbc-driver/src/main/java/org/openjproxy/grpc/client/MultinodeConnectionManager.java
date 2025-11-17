@@ -38,6 +38,7 @@ public class MultinodeConnectionManager {
     private final AtomicInteger roundRobinCounter;
     private final int retryAttempts;
     private final long retryDelayMs;
+    private final List<ServerHealthListener> healthListeners; // Phase 2: Listeners for server health changes
     
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints) {
         this(serverEndpoints, CommonConstants.DEFAULT_MULTINODE_RETRY_ATTEMPTS, 
@@ -57,6 +58,7 @@ public class MultinodeConnectionManager {
         this.roundRobinCounter = new AtomicInteger(0);
         this.retryAttempts = retryAttempts;
         this.retryDelayMs = retryDelayMs;
+        this.healthListeners = new ArrayList<>(); // Phase 2: Initialize listener list
         
         // Initialize channels and stubs for all servers
         initializeConnections();
@@ -413,6 +415,9 @@ public class MultinodeConnectionManager {
         log.warn("Marked server {} as unhealthy due to connection-level error: {}", 
                 endpoint.getAddress(), exception.getMessage());
         
+        // Phase 2: Notify listeners that server became unhealthy
+        notifyServerUnhealthy(endpoint, exception);
+        
         // Remove the failed channel from the map, but don't shut it down immediately
         // The channel will be replaced during recovery, and the old one will be garbage collected
         // This prevents "Channel shutdown invoked" errors for in-flight operations
@@ -475,6 +480,9 @@ public class MultinodeConnectionManager {
                     endpoint.setHealthy(true);
                     endpoint.setLastFailureTime(0);
                     log.info("Successfully recovered server {}", endpoint.getAddress());
+                    
+                    // Phase 2: Notify listeners that server recovered
+                    notifyServerRecovered(endpoint);
                 } catch (Exception e) {
                     endpoint.setLastFailureTime(currentTime);
                     log.debug("Server {} recovery attempt failed: {}", 
@@ -648,6 +656,63 @@ public class MultinodeConnectionManager {
         
         channelMap.clear();
         sessionToServerMap.clear();
+    }
+    
+    /**
+     * Phase 2: Adds a server health listener.
+     * 
+     * @param listener The listener to add
+     */
+    public void addHealthListener(ServerHealthListener listener) {
+        if (listener != null && !healthListeners.contains(listener)) {
+            healthListeners.add(listener);
+            log.debug("Added server health listener: {}", listener.getClass().getSimpleName());
+        }
+    }
+    
+    /**
+     * Phase 2: Removes a server health listener.
+     * 
+     * @param listener The listener to remove
+     */
+    public void removeHealthListener(ServerHealthListener listener) {
+        if (listener != null) {
+            healthListeners.remove(listener);
+            log.debug("Removed server health listener: {}", listener.getClass().getSimpleName());
+        }
+    }
+    
+    /**
+     * Phase 2: Notifies all listeners that a server became unhealthy.
+     * 
+     * @param endpoint The server endpoint that became unhealthy
+     * @param exception The exception that caused the failure
+     */
+    private void notifyServerUnhealthy(ServerEndpoint endpoint, Exception exception) {
+        for (ServerHealthListener listener : healthListeners) {
+            try {
+                listener.onServerUnhealthy(endpoint, exception);
+            } catch (Exception e) {
+                log.error("Error notifying listener of unhealthy server {}: {}", 
+                        endpoint.getAddress(), e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Phase 2: Notifies all listeners that a server recovered.
+     * 
+     * @param endpoint The server endpoint that recovered
+     */
+    private void notifyServerRecovered(ServerEndpoint endpoint) {
+        for (ServerHealthListener listener : healthListeners) {
+            try {
+                listener.onServerRecovered(endpoint);
+            } catch (Exception e) {
+                log.error("Error notifying listener of recovered server {}: {}", 
+                        endpoint.getAddress(), e.getMessage(), e);
+            }
+        }
     }
     
     /**

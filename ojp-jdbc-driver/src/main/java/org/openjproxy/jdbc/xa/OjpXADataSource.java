@@ -3,6 +3,8 @@ package org.openjproxy.jdbc.xa;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.client.MultinodeConnectionManager;
+import org.openjproxy.grpc.client.MultinodeStatementService;
 import org.openjproxy.grpc.client.MultinodeUrlParser;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.jdbc.UrlParser;
@@ -196,7 +198,19 @@ public class OjpXADataSource implements XADataSource {
         // Create XA connection using the shared StatementService
         // The GRPC channel is already open and will be reused
         // The session will be created lazily when first needed
-        return new OjpXAConnection(statementService, cleanUrl, username, password, properties, serverEndpoints);
+        OjpXAConnection xaConnection = new OjpXAConnection(statementService, cleanUrl, username, password, properties, serverEndpoints);
+        
+        // Phase 2: Register connection as health listener if using multinode
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null) {
+                connectionManager.addHealthListener(xaConnection);
+                log.debug("Registered XA connection as health listener");
+            }
+        }
+        
+        return xaConnection;
     }
 
     @Override
