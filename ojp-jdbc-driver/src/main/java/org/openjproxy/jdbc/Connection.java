@@ -22,6 +22,7 @@ import org.openjproxy.grpc.client.StatementService;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLNonTransientConnectionException;
 import java.sql.SQLWarning;
 import java.sql.Struct;
 import java.util.ArrayList;
@@ -44,6 +45,9 @@ public class Connection implements java.sql.Connection {
     private boolean autoCommit = true;
     private boolean readOnly = false;
     private boolean closed;
+    
+    // For server recovery and connection redistribution
+    private volatile boolean forceInvalid = false;
 
     public Connection(SessionInfo session, StatementService statementService, DbName dbName) {
         this.session = session;
@@ -51,22 +55,58 @@ public class Connection implements java.sql.Connection {
         this.closed = false;
         this.dbName = dbName;
     }
+    
+    /**
+     * Marks this connection as invalid for forced removal from connection pool.
+     * After marking, isValid() will return false and all operations will throw
+     * SQLNonTransientConnectionException with SQLState 08006.
+     * 
+     * This is used during connection redistribution when servers recover.
+     */
+    public void markForceInvalid() {
+        this.forceInvalid = true;
+        log.debug("Connection marked for forced invalidation");
+    }
+    
+    /**
+     * Checks if connection is valid before executing operations.
+     * Throws SQLNonTransientConnectionException with SQLState 08006 if invalid.
+     * 
+     * @throws SQLException if connection is marked invalid or closed
+     */
+    private void checkValid() throws SQLException {
+        if (closed) {
+            throw new SQLException("Connection is closed");
+        }
+        if (forceInvalid) {
+            throw new SQLNonTransientConnectionException(
+                "Connection has been marked invalid for redistribution",
+                "08006"  // SQLState: connection failure
+            );
+        }
+    }
 
     @Override
     public java.sql.Statement createStatement() throws SQLException {
         log.debug("createStatement called");
+        checkValid();
+        checkValid();
         return new Statement(this, statementService);
     }
 
     @Override
     public java.sql.PreparedStatement prepareStatement(String sql) throws SQLException {
         log.debug("prepareStatement: {}", sql);
+        checkValid();
+        checkValid();
         return new PreparedStatement(this, sql, this.statementService);
     }
 
     @Override
     public CallableStatement prepareCall(String sql) throws SQLException {
         log.debug("prepareCall: {}", sql);
+        checkValid();
+        checkValid();
         String remoteCallableStatementUUID = this.callProxy(CallType.CALL_PREPARE, "Call", String.class, Arrays.asList(sql));
         return new org.openjproxy.jdbc.CallableStatement(this, this.statementService, remoteCallableStatementUUID);
     }
@@ -74,12 +114,16 @@ public class Connection implements java.sql.Connection {
     @Override
     public String nativeSQL(String sql) throws SQLException {
         log.debug("nativeSQL: {}", sql);
+        checkValid();
+        checkValid();
         return this.callProxy(CallType.CALL_NATIVE, "SQL", String.class, Arrays.asList(sql));
     }
 
     @Override
     public void setAutoCommit(boolean autoCommit) throws SQLException {
         log.debug("setAutoCommit: {}", autoCommit);
+        checkValid();
+        checkValid();
         //if switching on autocommit with active transaction, commit current transaction.
         if (!this.autoCommit && autoCommit &&
                 TransactionStatus.TRX_ACTIVE.equals(session.getTransactionInfo().getTransactionStatus())) {
@@ -94,12 +138,16 @@ public class Connection implements java.sql.Connection {
     @Override
     public boolean getAutoCommit() throws SQLException {
         log.debug("getAutoCommit called");
+        checkValid();
+        checkValid();
         return this.autoCommit;
     }
 
     @Override
     public void commit() throws SQLException {
         log.debug("commit called");
+        checkValid();
+        checkValid();
         if (!this.autoCommit) {
             this.session = this.statementService.commitTransaction(this.session);
         }
@@ -108,6 +156,8 @@ public class Connection implements java.sql.Connection {
     @Override
     public void rollback() throws SQLException {
         log.debug("rollback called");
+        checkValid();
+        checkValid();
         if (!this.autoCommit) {
             this.session = this.statementService.rollbackTransaction(this.session);
         }
@@ -141,12 +191,14 @@ public class Connection implements java.sql.Connection {
     @Override
     public DatabaseMetaData getMetaData() throws SQLException {
         log.debug("getMetaData called");
+        checkValid();
         return new org.openjproxy.jdbc.DatabaseMetaData(this.session, this.statementService, this, null);
     }
 
     @Override
     public void setReadOnly(boolean readOnly) throws SQLException {
         log.debug("setReadOnly: {}", readOnly);
+        checkValid();
         if (!DbName.H2.equals(this.dbName)) {
             this.readOnly = readOnly;
         }
@@ -155,47 +207,55 @@ public class Connection implements java.sql.Connection {
     @Override
     public boolean isReadOnly() throws SQLException {
         log.debug("isReadOnly called");
+        checkValid();
         return this.readOnly;
     }
 
     @Override
     public void setCatalog(String catalog) throws SQLException {
         log.debug("setCatalog: {}", catalog);
+        checkValid();
         this.callProxy(CallType.CALL_SET, "Catalog", Void.class, Arrays.asList(catalog));
     }
 
     @Override
     public String getCatalog() throws SQLException {
         log.debug("getCatalog called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "Catalog", String.class);
     }
 
     @Override
     public void setTransactionIsolation(int level) throws SQLException {
         log.debug("setTransactionIsolation: {}", level);
+        checkValid();
         this.callProxy(CallType.CALL_SET, "TransactionIsolation", Void.class, Arrays.asList(level));
     }
 
     @Override
     public int getTransactionIsolation() throws SQLException {
         log.debug("getTransactionIsolation called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "TransactionIsolation", Integer.class);
     }
 
     @Override
     public SQLWarning getWarnings() throws SQLException {
         log.debug("getWarnings called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "Warnings", SQLWarning.class);
     }
 
     @Override
     public void clearWarnings() throws SQLException {
         log.debug("clearWarnings called");
+        checkValid();
     }
 
     @Override
     public java.sql.Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException {
         log.debug("createStatement: {}, {}", resultSetType, resultSetConcurrency);
+        checkValid();
         return new Statement(this, statementService, this.hashMapOf(
                 List.of(
                         CommonConstants.STATEMENT_RESULT_SET_TYPE_KEY,
@@ -207,6 +267,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency) throws SQLException {
         log.debug("prepareStatement: {}, {}, {}", sql, resultSetType, resultSetConcurrency);
+        checkValid();
         return new PreparedStatement(this, sql, statementService, this.hashMapOf(
                 List.of(
                         CommonConstants.STATEMENT_RESULT_SET_TYPE_KEY,
@@ -227,6 +288,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency) throws SQLException {
         log.debug("prepareCall: {}, {}, {}", sql, resultSetType, resultSetConcurrency);
+        checkValid();
         String remoteCallableStatementUUID = this.callProxy(CallType.CALL_PREPARE, "Call", String.class,
                 Arrays.asList(sql, resultSetType, resultSetConcurrency));
         return new org.openjproxy.jdbc.CallableStatement(this, this.statementService, remoteCallableStatementUUID);
@@ -235,30 +297,35 @@ public class Connection implements java.sql.Connection {
     @Override
     public Map<String, Class<?>> getTypeMap() throws SQLException {
         log.debug("getTypeMap called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "TypeMap", Map.class);
     }
 
     @Override
     public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
         log.debug("setTypeMap: <Map>");
+        checkValid();
         this.callProxy(CallType.CALL_SET, "TypeMap", Void.class, Arrays.asList(map));
     }
 
     @Override
     public void setHoldability(int holdability) throws SQLException {
         log.debug("setHoldability: {}", holdability);
+        checkValid();
         this.callProxy(CallType.CALL_SET, "Holdability", Void.class, Arrays.asList(holdability));
     }
 
     @Override
     public int getHoldability() throws SQLException {
         log.debug("getHoldability called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "Holdability", Integer.class);
     }
 
     @Override
     public Savepoint setSavepoint() throws SQLException {
         log.debug("setSavepoint called");
+        checkValid();
         String uuid = this.callProxy(CallType.CALL_SET, "Savepoint", String.class);
         return new org.openjproxy.jdbc.Savepoint(uuid, this.statementService, this);
     }
@@ -266,6 +333,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
         log.debug("setSavepoint: {}", name);
+        checkValid();
         String uuid = this.callProxy(CallType.CALL_SET, "Savepoint", String.class, Arrays.asList(name));
         return new org.openjproxy.jdbc.Savepoint(uuid, this.statementService, this);
     }
@@ -273,6 +341,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public void rollback(java.sql.Savepoint savepoint) throws SQLException {
         log.debug("rollback: <Savepoint>");
+        checkValid();
         this.callProxy(CallType.CALL_ROLLBACK, "", Void.class,
                 Arrays.asList(((Savepoint)savepoint).getSavepointUUID()));
     }
@@ -280,6 +349,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public void releaseSavepoint(java.sql.Savepoint savepoint) throws SQLException {
         log.debug("releaseSavepoint: <Savepoint>");
+        checkValid();
         org.openjproxy.jdbc.Savepoint ojpSavepoint = (org.openjproxy.jdbc.Savepoint) savepoint;
         this.callProxy(CallType.CALL_RELEASE, "Savepoint", Void.class,
                 Arrays.asList(ojpSavepoint.getSavepointUUID()));
@@ -288,6 +358,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
         log.debug("createStatement: {}, {}, {}", resultSetType, resultSetConcurrency, resultSetHoldability);
+        checkValid();
         return new Statement(this, statementService, this.hashMapOf(
                 List.of(CommonConstants.STATEMENT_RESULT_SET_TYPE_KEY,
                         CommonConstants.STATEMENT_RESULT_SET_CONCURRENCY_KEY,
@@ -299,6 +370,7 @@ public class Connection implements java.sql.Connection {
     public java.sql.PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency,
                                                        int resultSetHoldability) throws SQLException {
         log.debug("prepareStatement: {}, {}, {}, {}", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
+        checkValid();
         return new PreparedStatement(this, sql, this.statementService, this.hashMapOf(
                 List.of(CommonConstants.STATEMENT_RESULT_SET_TYPE_KEY,
                         CommonConstants.STATEMENT_RESULT_SET_CONCURRENCY_KEY,
@@ -309,6 +381,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
         log.debug("prepareCall: {}, {}, {}, {}", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
+        checkValid();
         String remoteCallableStatementUUID = this.callProxy(CallType.CALL_PREPARE, "Call", String.class,
                 Arrays.asList(sql, resultSetType, resultSetConcurrency, resultSetHoldability));
         return new org.openjproxy.jdbc.CallableStatement(this, this.statementService, remoteCallableStatementUUID);
@@ -317,6 +390,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SQLException {
         log.debug("prepareStatement: {}, {}", sql, autoGeneratedKeys);
+        checkValid();
         return new PreparedStatement(this, sql, this.statementService, this.hashMapOf(
                 List.of(CommonConstants.STATEMENT_AUTO_GENERATED_KEYS_KEY)
                 , List.of(autoGeneratedKeys)));
@@ -325,6 +399,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.PreparedStatement prepareStatement(String sql, int[] columnIndexes) throws SQLException {
         log.debug("prepareStatement: {}, <int[]>", sql);
+        checkValid();
         return new PreparedStatement(this, sql, this.statementService, this.hashMapOf(
                 List.of(CommonConstants.STATEMENT_COLUMN_INDEXES_KEY)
                 , List.of(columnIndexes)));
@@ -333,6 +408,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public java.sql.PreparedStatement prepareStatement(String sql, String[] columnNames) throws SQLException {
         log.debug("prepareStatement: {}, <String[]>", sql);
+        checkValid();
         List<Object> values = new ArrayList<>();
         values.add(columnNames);
         return new PreparedStatement(this, sql, this.statementService, this.hashMapOf(
@@ -343,6 +419,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public Clob createClob() throws SQLException {
         log.debug("createClob called");
+        checkValid();
         return new org.openjproxy.jdbc.Clob(this, new LobServiceImpl(this, this.statementService),
                 this.statementService,
                 null
@@ -352,6 +429,7 @@ public class Connection implements java.sql.Connection {
     @Override
     public Blob createBlob() throws SQLException {
         log.debug("createBlob called");
+        checkValid();
         return new org.openjproxy.jdbc.Blob(this, new LobServiceImpl(this, this.statementService),
                 this.statementService,
                 null
@@ -361,19 +439,21 @@ public class Connection implements java.sql.Connection {
     @Override
     public NClob createNClob() throws SQLException {
         log.debug("createNClob called");
+        checkValid();
         return new org.openjproxy.jdbc.NClob();
     }
 
     @Override
     public SQLXML createSQLXML() throws SQLException {
         log.debug("createSQLXML called");
+        checkValid();
         return new org.openjproxy.jdbc.SQLXML();
     }
 
     @Override
     public boolean isValid(int timeout) throws SQLException {
         log.debug("isValid: {}", timeout);
-        if (this.closed) {
+        if (this.closed || this.forceInvalid) {
             return false;
         }
         return this.callProxy(CallType.CALL_IS, "Valid", Boolean.class, Arrays.asList(timeout));
@@ -396,18 +476,21 @@ public class Connection implements java.sql.Connection {
     @Override
     public String getClientInfo(String name) throws SQLException {
         log.debug("getClientInfo: {}", name);
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "ClientInfo", String.class, Arrays.asList(name));
     }
 
     @Override
     public Properties getClientInfo() throws SQLException {
         log.debug("getClientInfo called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "ClientInfo", Properties.class);
     }
 
     @Override
     public Array createArrayOf(String typeName, Object[] elements) throws SQLException {
         log.debug("createArrayOf: {}, <Object[]>", typeName);
+        checkValid();
         if (DbName.MYSQL.equals(this.dbName)) {
             throw new SQLFeatureNotSupportedException("MySql does not support creating array of.");
         }
@@ -420,30 +503,35 @@ public class Connection implements java.sql.Connection {
     @Override
     public Struct createStruct(String typeName, Object[] attributes) throws SQLException {
         log.debug("createStruct: {}, <Object[]>", typeName);
+        checkValid();
         throw new SQLFeatureNotSupportedException("Not supported.");
     }
 
     @Override
     public void setSchema(String schema) throws SQLException {
         log.debug("setSchema: {}", schema);
+        checkValid();
         this.callProxy(CallType.CALL_SET, "Schema", Void.class, Arrays.asList(schema));
     }
 
     @Override
     public String getSchema() throws SQLException {
         log.debug("getSchema called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "Schema", String.class);
     }
 
     @Override
     public void abort(Executor executor) throws SQLException {
         log.debug("abort called");
+        checkValid();
         throw new SQLFeatureNotSupportedException("Not supported.");
     }
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
         log.debug("setNetworkTimeout: <Executor>, {}", milliseconds);
+        checkValid();
         this.callProxy(CallType.CALL_SET, "NetworkTimeout", Void.class,
                 Arrays.asList(executor, milliseconds));
     }
@@ -451,18 +539,21 @@ public class Connection implements java.sql.Connection {
     @Override
     public int getNetworkTimeout() throws SQLException {
         log.debug("getNetworkTimeout called");
+        checkValid();
         return this.callProxy(CallType.CALL_GET, "NetworkTimeout", Integer.class);
     }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
         log.debug("unwrap: {}", iface);
+        checkValid();
         throw new SQLFeatureNotSupportedException("Cannot unwrap remote proxy object.");
     }
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
         log.debug("isWrapperFor: {}", iface);
+        checkValid();
         return false;
     }
 
