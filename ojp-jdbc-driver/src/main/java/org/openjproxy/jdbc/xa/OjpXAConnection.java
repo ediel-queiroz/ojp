@@ -4,6 +4,10 @@ import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.ProtoConverter;
+import org.openjproxy.grpc.client.MultinodeConnectionManager;
+import org.openjproxy.grpc.client.MultinodeStatementService;
+import org.openjproxy.grpc.client.ServerEndpoint;
+import org.openjproxy.grpc.client.ServerHealthListener;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.jdbc.ClientUUID;
 
@@ -25,9 +29,11 @@ import java.util.Properties;
  * 
  * <p>The server-side session is created lazily when first needed (either when getting
  * the XAResource or when getting a Connection), to avoid creating unnecessary sessions.
+ * 
+ * <p>Phase 2: Implements ServerHealthListener to handle server failures proactively.
  */
 @Slf4j
-public class OjpXAConnection implements XAConnection {
+public class OjpXAConnection implements XAConnection, ServerHealthListener {
 
     private final StatementService statementService;
     private SessionInfo sessionInfo; // Lazily initialized
@@ -40,6 +46,7 @@ public class OjpXAConnection implements XAConnection {
     private boolean closed = false;
     private List<String> serverEndpoints;
     private final List<ConnectionEventListener> listeners = new ArrayList<>();
+    private String boundServerAddress; // Phase 2: Track which server this connection is bound to
 
     public OjpXAConnection(StatementService statementService, String url, String user, String password, Properties properties, List<String> serverEndpoints) {
         log.debug("Creating OjpXAConnection for URL: {}", url);
@@ -85,6 +92,13 @@ public class OjpXAConnection implements XAConnection {
             }
 
             this.sessionInfo = statementService.connect(connBuilder.build());
+            
+            // Phase 2: Track the bound server from session info
+            if (sessionInfo.getTargetServer() != null && !sessionInfo.getTargetServer().isEmpty()) {
+                this.boundServerAddress = sessionInfo.getTargetServer();
+                log.debug("XA connection bound to server: {}", boundServerAddress);
+            }
+            
             log.debug("XA connection established with session: {}", sessionInfo.getSessionUUID());
             return sessionInfo;
 
@@ -92,6 +106,26 @@ public class OjpXAConnection implements XAConnection {
             log.error("Failed to create XA connection session", e);
             throw new SQLException("Failed to create XA connection session", e);
         }
+    }
+    
+    /**
+     * Phase 1: Recreates the session on a different server.
+     * Used for retry logic when the bound server fails.
+     * 
+     * @return The new SessionInfo
+     * @throws SQLException if session recreation fails
+     */
+    synchronized SessionInfo recreateSession() throws SQLException {
+        log.info("Recreating XA session (previous session: {})", 
+                sessionInfo != null ? sessionInfo.getSessionUUID() : "none");
+        
+        // Clear existing session
+        sessionInfo = null;
+        boundServerAddress = null;
+        xaResource = null; // Force recreation of XAResource with new session
+        
+        // Create new session (will use round-robin to select a different server)
+        return getOrCreateSession();
     }
 
     @Override
@@ -101,7 +135,7 @@ public class OjpXAConnection implements XAConnection {
         if (xaResource == null) {
             // Lazily create session when XAResource is first requested
             SessionInfo session = getOrCreateSession();
-            xaResource = new OjpXAResource(statementService, session);
+            xaResource = new OjpXAResource(statementService, session, this); // Phase 1: Pass this connection to XAResource
         }
         return xaResource;
     }
@@ -198,5 +232,36 @@ public class OjpXAConnection implements XAConnection {
         if (closed) {
             throw new SQLException("XA Connection is closed");
         }
+    }
+    
+    /**
+     * Phase 2: Called when a server becomes unhealthy.
+     * If this connection is bound to that server, close it proactively
+     * so Atomikos will create a new connection.
+     */
+    @Override
+    public void onServerUnhealthy(ServerEndpoint endpoint, Exception exception) {
+        String serverAddr = endpoint.getHost() + ":" + endpoint.getPort();
+        
+        // Check if this connection is bound to the failed server
+        if (boundServerAddress != null && boundServerAddress.equals(serverAddr)) {
+            log.warn("XA connection bound to unhealthy server {}, closing connection proactively", serverAddr);
+            try {
+                // Close this connection - Atomikos will remove it from pool and create a new one
+                close();
+            } catch (SQLException e) {
+                log.error("Error closing XA connection after server failure: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Phase 2: Called when a server recovers.
+     * No action needed for individual connections.
+     */
+    @Override
+    public void onServerRecovered(ServerEndpoint endpoint) {
+        // No action needed - new connections will naturally use recovered servers
+        log.debug("Server {} recovered", endpoint.getAddress());
     }
 }
