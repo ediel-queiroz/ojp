@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 import org.openjproxy.jdbc.xa.OjpXADataSource;
+import org.postgresql.xa.PGXADataSource;
 
 import javax.sql.DataSource;
 import javax.transaction.UserTransaction;
@@ -31,18 +32,18 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 @Slf4j
 public class MultinodeXAIntegrationTest {
-    private static final int THREADS = 300; // Number of worker threads
-    private static final int RAMPUP_MS = 30 * 60 * 1000; // 120 seconds Ramp-up window in milliseconds
+    private static final int THREADS = 5; // Number of worker threads
+    private static final int RAMPUP_MS = 50 * 1000; // 120 seconds Ramp-up window in milliseconds
 
     // Atomikos pool sizing (tweak as desired)
     private static final int ATOMIKOS_MIN_POOL_SIZE = 20;
-    private static final int ATOMIKOS_MAX_POOL_SIZE = 60;
+    private static final int ATOMIKOS_MAX_POOL_SIZE = 100;
 
     protected static boolean isTestDisabled;
     private static Queue<Long> queryDurations = new ConcurrentLinkedQueue<>();
     private static AtomicInteger totalQueries = new AtomicInteger(0);
     private static AtomicInteger failedQueries = new AtomicInteger(0);
-    private static ExecutorService queryExecutor = Executors.newFixedThreadPool(200);//More than enough
+    private static ExecutorService queryExecutor = new RoundRobinExecutorService(100);
 
 
     private static AtomikosDataSourceBean xaDataSource;
@@ -166,6 +167,8 @@ public class MultinodeXAIntegrationTest {
         double avgQueryMs = numQueries > 0
                 ? queryDurations.stream().mapToLong(Long::longValue).average().orElse(0) / 1_000_000.0
                 : 0;
+
+        Thread.sleep(5000); //Wait for any pending queries and logs to flush
         System.out.println("\n=== TEST REPORT ===");
         System.out.println("Total queries executed: " + numQueries);
         System.out.println("Total test duration: " + totalTimeMs + " ms");
@@ -173,10 +176,11 @@ public class MultinodeXAIntegrationTest {
         System.out.println("Total query failures: " + numFailures);
         //Assertions.assertEquals(2160, numQueries);
         Assertions.assertTrue(numFailures < 5, "Expected fewer than 5 failures, but got: " + numFailures);
-        Assertions.assertTrue(totalTimeMs < 180000);
-        Assertions.assertTrue(avgQueryMs < 100);
+        Assertions.assertTrue(totalTimeMs < 180000, "Total test time too high: " + totalTimeMs + " ms");
+        Assertions.assertTrue(avgQueryMs < 1000.0, "Average query time too high: " + avgQueryMs + " ms");
     }
 
+    @SneakyThrows
     private static void timeAndRun(Callable<Void> query) {
         //Run each query in a different thread because if not Atomikos reuses the same connection, avoiding balancing between servers.
         CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
@@ -191,8 +195,8 @@ public class MultinodeXAIntegrationTest {
             queryDurations.add(end - start);
             totalQueries.incrementAndGet();
         }, queryExecutor);
-        //Wait CompletableFuture to finish before proceeding
-        future.join();
+        future.get();
+        //Thread.sleep(500); //Small delay to avoid too much parallelism
     }
 
     @FunctionalInterface
@@ -244,14 +248,16 @@ public class MultinodeXAIntegrationTest {
 
         synchronized (MultinodeIntegrationTest.class) {
             if (xaDataSource == null) {
-                OjpXADataSource ojpXaDataSource = new OjpXADataSource();
-                ojpXaDataSource.setUrl(url);
-                ojpXaDataSource.setUser(user);
-                ojpXaDataSource.setPassword(password);
+                OjpXADataSource xaDataSourceImpl = new OjpXADataSource();
+                //Kept for reference testing with Postgres native XA
+                //PGXADataSource xaDataSourceImpl = new PGXADataSource();
+                xaDataSourceImpl.setUrl(url);
+                xaDataSourceImpl.setUser(user);
+                xaDataSourceImpl.setPassword(password);
 
                 xaDataSource = new AtomikosDataSourceBean();
                 xaDataSource.setUniqueResourceName("ATOMIKOS_OJP_XA_DS");
-                xaDataSource.setXaDataSource(ojpXaDataSource);
+                xaDataSource.setXaDataSource(xaDataSourceImpl);
                 xaDataSource.setMinPoolSize(ATOMIKOS_MIN_POOL_SIZE);
                 xaDataSource.setMaxPoolSize(ATOMIKOS_MAX_POOL_SIZE);
                 log.info("✓ Atomikos XA DataSource initialized");

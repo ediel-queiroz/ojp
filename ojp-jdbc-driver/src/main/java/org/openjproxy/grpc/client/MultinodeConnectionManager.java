@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
@@ -40,13 +41,33 @@ public class MultinodeConnectionManager {
     private final long retryDelayMs;
     private final List<ServerHealthListener> healthListeners; // Phase 2: Listeners for server health changes
     
+    // Health check and redistribution support
+    private final HealthCheckConfig healthCheckConfig;
+    private final AtomicLong lastHealthCheckTimestamp;
+    private final HealthCheckValidator healthCheckValidator;
+    private final ConnectionTracker connectionTracker;
+    private final ConnectionRedistributor connectionRedistributor;
+    
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints) {
         this(serverEndpoints, CommonConstants.DEFAULT_MULTINODE_RETRY_ATTEMPTS, 
-             CommonConstants.DEFAULT_MULTINODE_RETRY_DELAY_MS);
+             CommonConstants.DEFAULT_MULTINODE_RETRY_DELAY_MS, null);
     }
     
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints, 
                                     int retryAttempts, long retryDelayMs) {
+        this(serverEndpoints, retryAttempts, retryDelayMs, null);
+    }
+    
+    public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints, 
+                                    int retryAttempts, long retryDelayMs,
+                                    HealthCheckConfig healthCheckConfig) {
+        this(serverEndpoints, retryAttempts, retryDelayMs, healthCheckConfig, null);
+    }
+    
+    public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints, 
+                                    int retryAttempts, long retryDelayMs,
+                                    HealthCheckConfig healthCheckConfig,
+                                    ConnectionTracker connectionTracker) {
         if (serverEndpoints == null || serverEndpoints.isEmpty()) {
             throw new IllegalArgumentException("Server endpoints list cannot be null or empty");
         }
@@ -59,12 +80,17 @@ public class MultinodeConnectionManager {
         this.retryAttempts = retryAttempts;
         this.retryDelayMs = retryDelayMs;
         this.healthListeners = new ArrayList<>(); // Phase 2: Initialize listener list
+        this.healthCheckConfig = healthCheckConfig != null ? healthCheckConfig : HealthCheckConfig.createDefault();
+        this.lastHealthCheckTimestamp = new AtomicLong(0);
+        this.connectionTracker = connectionTracker != null ? connectionTracker : new ConnectionTracker();
+        this.healthCheckValidator = new HealthCheckValidator(this.healthCheckConfig, this);
+        this.connectionRedistributor = new ConnectionRedistributor(this.connectionTracker, this.healthCheckConfig);
         
         // Initialize channels and stubs for all servers
         initializeConnections();
         
-        log.info("MultinodeConnectionManager initialized with {} servers: {}", 
-                serverEndpoints.size(), serverEndpoints);
+        log.info("MultinodeConnectionManager initialized with {} servers: {}, health check config: {}", 
+                serverEndpoints.size(), serverEndpoints, this.healthCheckConfig);
     }
     
     private void initializeConnections() {
@@ -111,6 +137,11 @@ public class MultinodeConnectionManager {
         
         log.info("=== connect() called: isXA={} ===", isXA);
         
+        // Try to trigger health check (time-based, non-blocking)
+        if (healthCheckConfig.isRedistributionEnabled()) {
+            tryTriggerHealthCheck();
+        }
+        
         if (isXA) {
             // For XA connections, use round-robin to select a single server
             return connectToSingleServer(connectionDetails);
@@ -118,6 +149,129 @@ public class MultinodeConnectionManager {
             // For non-XA connections, connect to all servers (existing behavior)
             return connectToAllServers(connectionDetails);
         }
+    }
+    
+    /**
+     * Attempts to trigger a health check if enough time has elapsed since the last check.
+     * Uses compareAndSet to ensure only one thread executes the health check.
+     * Non-blocking - if another thread is already doing a health check, this returns immediately.
+     */
+    private void tryTriggerHealthCheck() {
+        long now = System.currentTimeMillis();
+        long lastCheck = lastHealthCheckTimestamp.get();
+        long elapsed = now - lastCheck;
+        
+        // Only check if interval has passed
+        if (elapsed >= healthCheckConfig.getHealthCheckIntervalMs()) {
+            // Atomic update - only one thread succeeds
+            if (lastHealthCheckTimestamp.compareAndSet(lastCheck, now)) {
+                try {
+                    performHealthCheck();
+                } catch (Exception e) {
+                    log.warn("Health check failed: {}", e.getMessage());
+                    // Don't fail the connection attempt - health check is best effort
+                }
+            }
+        }
+    }
+    
+    /**
+     * Performs health check on unhealthy servers.
+     * If any servers have recovered, notifies listeners and triggers redistribution.
+     */
+    private void performHealthCheck() {
+        log.debug("Performing health check on unhealthy servers");
+        
+        List<ServerEndpoint> unhealthyServers = serverEndpoints.stream()
+                .filter(endpoint -> !endpoint.isHealthy())
+                .collect(Collectors.toList());
+        
+        if (unhealthyServers.isEmpty()) {
+            log.debug("No unhealthy servers to check");
+            return;
+        }
+        
+        log.info("Checking {} unhealthy server(s)", unhealthyServers.size());
+        
+        List<ServerEndpoint> recoveredServers = new ArrayList<>();
+        
+        // Check each unhealthy server
+        for (ServerEndpoint endpoint : unhealthyServers) {
+            long timeSinceFailure = System.currentTimeMillis() - endpoint.getLastFailureTime();
+            
+            // Only check if enough time has passed since last failure
+            if (timeSinceFailure >= healthCheckConfig.getHealthCheckThresholdMs()) {
+                if (validateServer(endpoint)) {
+                    log.info("Server {} has recovered", endpoint.getAddress());
+                    endpoint.markHealthy();
+                    recoveredServers.add(endpoint);
+                    notifyServerRecovered(endpoint);
+                } else {
+                    // Still unhealthy, update timestamp
+                    endpoint.setLastFailureTime(System.currentTimeMillis());
+                    log.debug("Server {} still unhealthy", endpoint.getAddress());
+                }
+            }
+        }
+        
+        // If any servers recovered, trigger connection redistribution
+        if (!recoveredServers.isEmpty() && healthCheckConfig.isRedistributionEnabled()) {
+            log.info("Triggering connection redistribution for {} recovered server(s)", 
+                    recoveredServers.size());
+            
+            List<ServerEndpoint> allHealthyServers = serverEndpoints.stream()
+                    .filter(ServerEndpoint::isHealthy)
+                    .collect(Collectors.toList());
+            
+            try {
+                connectionRedistributor.rebalance(recoveredServers, allHealthyServers);
+            } catch (Exception e) {
+                log.error("Failed to redistribute connections after server recovery: {}", 
+                        e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Validates if a server is healthy by attempting a simple connection.
+     * Returns true if server is responsive, false otherwise.
+     */
+    private boolean validateServer(ServerEndpoint endpoint) {
+        return healthCheckValidator.validateServer(endpoint);
+    }
+    
+    /**
+     * Provides public access to create a channel and stub for an endpoint.
+     * Used by HealthCheckValidator for server validation.
+     */
+    public ChannelAndStub createChannelAndStubForEndpoint(ServerEndpoint endpoint) {
+        return createChannelAndStub(endpoint);
+    }
+    
+    /**
+     * Closes a session by its UUID.
+     * Used by HealthCheckValidator to clean up test connections.
+     */
+    public void closeSession(String sessionUUID) throws SQLException {
+        if (sessionUUID == null || sessionUUID.isEmpty()) {
+            return;
+        }
+        
+        // Remove from session map
+        ServerEndpoint server = sessionToServerMap.remove(sessionUUID);
+        
+        if (server != null) {
+            log.debug("Closed session {}, was bound to {}", sessionUUID, server.getAddress());
+        }
+        
+        // TODO: Actually call close on the server - for now just remove from tracking
+    }
+    
+    /**
+     * Gets the connection tracker for integration with XA data sources.
+     */
+    public ConnectionTracker getConnectionTracker() {
+        return connectionTracker;
     }
     
     /**
@@ -376,17 +530,20 @@ public class MultinodeConnectionManager {
                 .filter(ServerEndpoint::isHealthy)
                 .collect(Collectors.toList());
         
-        // Always attempt to recover unhealthy servers if retry delay has passed
-        // This ensures we try to bring back downed servers even when others are healthy
-        attemptServerRecovery();
-        
-        // Re-check healthy servers after recovery attempt
-        healthyServers = serverEndpoints.stream()
-                .filter(ServerEndpoint::isHealthy)
-                .collect(Collectors.toList());
+        // Only attempt recovery if NO servers are healthy (last resort)
+        // Time-based health checks via tryTriggerHealthCheck() handle recovery for normal cases
+        if (healthyServers.isEmpty()) {
+            log.warn("No healthy servers available, attempting recovery as last resort");
+            attemptServerRecovery();
+            
+            // Re-check healthy servers after recovery attempt
+            healthyServers = serverEndpoints.stream()
+                    .filter(ServerEndpoint::isHealthy)
+                    .collect(Collectors.toList());
+        }
         
         if (healthyServers.isEmpty()) {
-            log.error("No healthy servers available");
+            log.error("No healthy servers available after recovery attempt");
             return null;
         }
         
