@@ -73,6 +73,15 @@ public class MultinodeUrlParser {
                     log.debug("Creating MultinodeStatementService for endpoints: {}",
                             MultinodeUrlParser.formatServerList(endpoints));
                     MultinodeConnectionManager connectionManager = new MultinodeConnectionManager(endpoints);
+                    
+                    // Wire in XAConnectionRedistributor for XA connection rebalancing
+                    HealthCheckConfig healthConfig = connectionManager.getHealthCheckConfig();
+                    if (healthConfig != null) {
+                        XAConnectionRedistributor redistributor = new XAConnectionRedistributor(connectionManager, healthConfig);
+                        connectionManager.setXaConnectionRedistributor(redistributor);
+                        log.info("XAConnectionRedistributor wired into MultinodeConnectionManager");
+                    }
+                    
                     return new MultinodeStatementService(connectionManager, url);
                 });
 

@@ -57,6 +57,16 @@ public class OjpXAConnection implements XAConnection, ServerHealthListener {
         this.properties = properties;
         this.serverEndpoints = serverEndpoints;
         // Session is created lazily when needed
+        
+        // Register as health listener if using multinode
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService ms = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager cm = ms.getConnectionManager();
+            if (cm != null) {
+                cm.addHealthListener(this);
+                log.debug("Registered XA connection as health listener with MultinodeConnectionManager");
+            }
+        }
     }
     
     /**
@@ -214,6 +224,16 @@ public class OjpXAConnection implements XAConnection, ServerHealthListener {
         
         closed = true;
         
+        // Deregister from health listener
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService ms = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager cm = ms.getConnectionManager();
+            if (cm != null) {
+                cm.removeHealthListener(this);
+                log.debug("Deregistered XA connection from health listener");
+            }
+        }
+        
         // Unregister from ConnectionTracker if registered
         if (logicalConnection != null && statementService instanceof MultinodeStatementService) {
             MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
@@ -299,11 +319,14 @@ public class OjpXAConnection implements XAConnection, ServerHealthListener {
     
     /**
      * Phase 2: Called when a server recovers.
-     * No action needed for individual connections.
+     * Intentionally conservative: do not recreate or close sessions here to avoid 
+     * disrupting in-flight XA transactions. Redistribution policy is handled centrally 
+     * by XAConnectionRedistributor which acts only on idle connections.
      */
     @Override
     public void onServerRecovered(ServerEndpoint endpoint) {
-        // No action needed - new connections will naturally use recovered servers
-        log.debug("Server {} recovered", endpoint.getAddress());
+        log.debug("Server {} recovered (XA connection listener)", endpoint.getAddress());
+        // Intentionally conservative: do not recreate or close sessions here to avoid disrupting in-flight XA transactions.
+        // Redistribution policy is handled centrally by XAConnectionRedistributor which acts only on idle connections.
     }
 }

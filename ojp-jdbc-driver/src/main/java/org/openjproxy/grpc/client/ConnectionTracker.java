@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -123,5 +124,88 @@ public class ConnectionTracker {
         int count = connectionToServerMap.size();
         connectionToServerMap.clear();
         log.info("Cleared {} tracked connections", count);
+    }
+    
+    /**
+     * Inner class to hold connection information for redistribution.
+     */
+    public static class ConnectionInfo {
+        private final String connectionUUID;
+        private final String boundServerAddress;
+        private final long lastUsedTime;
+        
+        public ConnectionInfo(String connectionUUID, String boundServerAddress, long lastUsedTime) {
+            this.connectionUUID = connectionUUID;
+            this.boundServerAddress = boundServerAddress;
+            this.lastUsedTime = lastUsedTime;
+        }
+        
+        public String getConnectionUUID() {
+            return connectionUUID;
+        }
+        
+        public String getBoundServerAddress() {
+            return boundServerAddress;
+        }
+        
+        public long getLastUsedTime() {
+            return lastUsedTime;
+        }
+    }
+    
+    /**
+     * Gets all XA connections with their metadata for redistribution.
+     * Returns a list of ConnectionInfo objects containing UUID, server address, and last used time.
+     * 
+     * @return List of ConnectionInfo for all tracked XA connections
+     */
+    public List<ConnectionInfo> getAllXAConnections() {
+        // For now, return all connections as we don't distinguish between XA and non-XA
+        // In a full implementation, we would filter by connection type
+        return connectionToServerMap.entrySet().stream()
+                .map(entry -> {
+                    Connection conn = entry.getKey();
+                    ServerEndpoint server = entry.getValue();
+                    // Use System.identityHashCode as a simple UUID proxy
+                    String uuid = String.valueOf(System.identityHashCode(conn));
+                    String serverAddr = server.getHost() + ":" + server.getPort();
+                    // For now, use current time - in a full implementation, track actual last used time
+                    long lastUsed = System.currentTimeMillis();
+                    return new ConnectionInfo(uuid, serverAddr, lastUsed);
+                })
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Closes an idle XA connection by its UUID.
+     * This is called by the redistributor to selectively close connections for rebalancing.
+     * 
+     * @param connectionUUID The UUID of the connection to close
+     * @throws SQLException if the connection cannot be closed
+     */
+    public void closeIdleConnection(String connectionUUID) throws SQLException {
+        // Find the connection by UUID (using identity hash code)
+        Connection toClose = null;
+        for (Connection conn : connectionToServerMap.keySet()) {
+            if (String.valueOf(System.identityHashCode(conn)).equals(connectionUUID)) {
+                toClose = conn;
+                break;
+            }
+        }
+        
+        if (toClose != null) {
+            try {
+                // Remove from tracking first
+                connectionToServerMap.remove(toClose);
+                // Close the connection
+                toClose.close();
+                log.debug("Closed idle connection {}", connectionUUID);
+            } catch (SQLException e) {
+                log.error("Failed to close connection {}: {}", connectionUUID, e.getMessage());
+                throw e;
+            }
+        } else {
+            log.warn("Connection {} not found for closing", connectionUUID);
+        }
     }
 }
