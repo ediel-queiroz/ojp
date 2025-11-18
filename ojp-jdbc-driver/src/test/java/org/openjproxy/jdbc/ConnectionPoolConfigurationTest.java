@@ -51,12 +51,8 @@ public class ConnectionPoolConfigurationTest {
 
     @Test
     public void testOjpPropertiesFileLoadingFromClasspath() throws Exception {
-        // Test that the driver can load the ojp.properties file from classpath
-        Driver driver = new Driver();
-        Method loadOjpPropertiesMethod = Driver.class.getDeclaredMethod("loadOjpProperties");
-        loadOjpPropertiesMethod.setAccessible(true);
-        
-        Properties properties = (Properties) loadOjpPropertiesMethod.invoke(driver);
+        // Test that the DatasourcePropertiesLoader can load the ojp.properties file from classpath
+        Properties properties = DatasourcePropertiesLoader.loadOjpProperties();
         
         if (properties != null) {
             // If properties file exists in test resources, verify it loads correctly

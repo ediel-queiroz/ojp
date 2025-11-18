@@ -13,8 +13,6 @@ import org.openjproxy.grpc.client.ServerEndpoint;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.client.StatementServiceGrpcClient;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
@@ -83,7 +81,7 @@ public class Driver implements java.sql.Driver {
         }
         
         // Load ojp.properties file and extract datasource-specific configuration
-        Properties ojpProperties = loadOjpPropertiesForDataSource(dataSourceName);
+        Properties ojpProperties = DatasourcePropertiesLoader.loadOjpPropertiesForDataSource(dataSourceName);
         
         ConnectionDetails.Builder connBuilder = ConnectionDetails.newBuilder()
                 .setUrl(connectionUrl)  // Use the possibly-modified URL with single endpoint
@@ -121,75 +119,7 @@ public class Driver implements java.sql.Driver {
         return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(cleanUrl));
     }
     
-    
-    /**
-     * Load ojp.properties and extract configuration specific to the given dataSource.
-     */
-    protected Properties loadOjpPropertiesForDataSource(String dataSourceName) {
-        Properties allProperties = loadOjpProperties();
-        if (allProperties == null || allProperties.isEmpty()) {
-            return null;
-        }
-        
-        Properties dataSourceProperties = new Properties();
-        
-        // Look for dataSource-prefixed properties first: {dataSourceName}.ojp.connection.pool.*
-        String prefix = dataSourceName + ".ojp.connection.pool.";
-        boolean foundDataSourceSpecific = false;
-        
-        for (String key : allProperties.stringPropertyNames()) {
-            if (key.startsWith(prefix)) {
-                // Remove the dataSource prefix and keep the standard property name
-                String standardKey = key.substring(dataSourceName.length() + 1); // Remove "{dataSourceName}."
-                dataSourceProperties.setProperty(standardKey, allProperties.getProperty(key));
-                foundDataSourceSpecific = true;
-            }
-        }
-        
-        // If no dataSource-specific properties found, and this is the "default" dataSource,
-        // look for unprefixed properties: ojp.connection.pool.*
-        if (!foundDataSourceSpecific && "default".equals(dataSourceName)) {
-            for (String key : allProperties.stringPropertyNames()) {
-                if (key.startsWith("ojp.connection.pool.")) {
-                    dataSourceProperties.setProperty(key, allProperties.getProperty(key));
-                }
-            }
-        }
-        
-        // If we found any properties, also include the dataSource name as a single property
-        // Note: The dataSource-prefixed properties (e.g., "webApp.ojp.connection.pool.*") 
-        // are sent to the server with their prefixes removed (e.g., "ojp.connection.pool.*"),
-        // and the dataSource name itself is sent separately as "ojp.datasource.name"
-        if (!dataSourceProperties.isEmpty()) {
-            dataSourceProperties.setProperty("ojp.datasource.name", dataSourceName);
-        }
-        
-        log.debug("Loaded {} properties for dataSource '{}': {}", 
-                dataSourceProperties.size(), dataSourceName, dataSourceProperties);
-        
-        return dataSourceProperties.isEmpty() ? null : dataSourceProperties;
-    }
 
-    /**
-     * Load the raw ojp.properties file from classpath.
-     */
-    protected Properties loadOjpProperties() {
-        Properties properties = new Properties();
-        
-        // Only try to load from resources/ojp.properties in the classpath
-        try (InputStream is = Driver.class.getClassLoader().getResourceAsStream("ojp.properties")) {
-            if (is != null) {
-                properties.load(is);
-                log.debug("Loaded ojp.properties from resources folder");
-                return properties;
-            }
-        } catch (IOException e) {
-            log.debug("Could not load ojp.properties from resources folder: {}", e.getMessage());
-        }
-        
-        log.debug("No ojp.properties file found, using server defaults");
-        return null;
-    }
 
     @Override
     public boolean acceptsURL(String url) throws SQLException {
