@@ -236,13 +236,6 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                         connHash, serverEndpoints.size(), actualMaxXaTransactions);
             }
             
-            // Initialize or retrieve XA transaction limiter for this connection
-            XaTransactionLimiter xaLimiter = ((SessionManagerImpl) sessionManager)
-                    .getOrCreateXaLimiter(connHash, actualMaxXaTransactions, xaStartTimeoutMillis);
-            log.info("XA limiter for connHash {}: max={}, active={}/{}", 
-                    connHash, xaLimiter.getMaxTransactions(), 
-                    xaLimiter.getActiveTransactions(), xaLimiter.getMaxTransactions());
-            
             // Handle XA connection - create native XADataSource (pass-through approach)
             XADataSource xaDataSource = this.xaDataSourceMap.get(connHash);
             if (xaDataSource == null) {
@@ -255,7 +248,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                     
                     // Create slow query segregation manager for XA datasource
                     // Use actualMaxXaTransactions as the pool size for XA operations
-                    createSlowQuerySegregationManagerForDatasource(connHash, actualMaxXaTransactions);
+                    createSlowQuerySegregationManagerForDatasource(connHash, actualMaxXaTransactions, true, xaStartTimeoutMillis);
                     
                     log.info("Created new native XADataSource for XA pass-through with connHash: {}", connHash);
                     
@@ -348,26 +341,76 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
      * Each datasource gets its own manager with pool size based on actual HikariCP configuration.
      */
     private void createSlowQuerySegregationManagerForDatasource(String connHash, int actualPoolSize) {
-        if (serverConfiguration.isSlowQuerySegregationEnabled()) {
-            SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
-                actualPoolSize,
-                serverConfiguration.getSlowQuerySlotPercentage(),
-                serverConfiguration.getSlowQueryIdleTimeout(),
-                serverConfiguration.getSlowQuerySlowSlotTimeout(),
-                serverConfiguration.getSlowQueryFastSlotTimeout(),
-                serverConfiguration.getSlowQueryUpdateGlobalAvgInterval(),
-                true
-            );
-            slowQuerySegregationManagers.put(connHash, manager);
-            log.info("Created SlowQuerySegregationManager for datasource {} with pool size {}", 
-                    connHash, actualPoolSize);
+        createSlowQuerySegregationManagerForDatasource(connHash, actualPoolSize, false, 0);
+    }
+    
+    /**
+     * Creates a SlowQuerySegregationManager for a datasource with XA-specific handling.
+     * 
+     * @param connHash The connection hash
+     * @param actualPoolSize The actual pool size (max XA transactions for XA, max pool size for non-XA)
+     * @param isXA Whether this is an XA connection
+     * @param xaStartTimeoutMillis The XA start timeout in milliseconds (only used for XA connections)
+     */
+    private void createSlowQuerySegregationManagerForDatasource(String connHash, int actualPoolSize, boolean isXA, long xaStartTimeoutMillis) {
+        boolean slowQueryEnabled = serverConfiguration.isSlowQuerySegregationEnabled();
+        
+        if (isXA) {
+            // XA-specific handling
+            if (slowQueryEnabled) {
+                // XA with slow query segregation enabled: use configured slow/fast slot allocation
+                SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
+                    actualPoolSize,
+                    serverConfiguration.getSlowQuerySlotPercentage(),
+                    serverConfiguration.getSlowQueryIdleTimeout(),
+                    serverConfiguration.getSlowQuerySlowSlotTimeout(),
+                    serverConfiguration.getSlowQueryFastSlotTimeout(),
+                    serverConfiguration.getSlowQueryUpdateGlobalAvgInterval(),
+                    true
+                );
+                slowQuerySegregationManagers.put(connHash, manager);
+                log.info("Created SlowQuerySegregationManager for XA datasource {} with pool size {} (slow query segregation enabled)", 
+                        connHash, actualPoolSize);
+            } else {
+                // XA with slow query segregation disabled: use SlotManager only (no QueryPerformanceMonitor)
+                // Set totalSlots=actualPoolSize, fastSlots=actualPoolSize, slowSlots=0
+                // Use xaStartTimeoutMillis as the fast slot timeout
+                SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
+                    actualPoolSize,
+                    0, // slowSlotPercentage = 0 means all slots are fast
+                    0, // idleTimeout not relevant
+                    0, // slowSlotTimeout not relevant
+                    xaStartTimeoutMillis, // Use XA start timeout for fast slot timeout
+                    0, // updateGlobalAvgInterval = 0 means no performance monitoring
+                    true // enabled = true to use SlotManager
+                );
+                slowQuerySegregationManagers.put(connHash, manager);
+                log.info("Created SlowQuerySegregationManager for XA datasource {} with {} slots (all fast, timeout={}ms, no performance monitoring)", 
+                        connHash, actualPoolSize, xaStartTimeoutMillis);
+            }
         } else {
-            // Create disabled manager for consistency
-            SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
-                1, 0, 0, 0, 0, 0, false
-            );
-            slowQuerySegregationManagers.put(connHash, manager);
-            log.info("Created disabled SlowQuerySegregationManager for datasource {}", connHash);
+            // Non-XA handling (original logic)
+            if (slowQueryEnabled) {
+                SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
+                    actualPoolSize,
+                    serverConfiguration.getSlowQuerySlotPercentage(),
+                    serverConfiguration.getSlowQueryIdleTimeout(),
+                    serverConfiguration.getSlowQuerySlowSlotTimeout(),
+                    serverConfiguration.getSlowQueryFastSlotTimeout(),
+                    serverConfiguration.getSlowQueryUpdateGlobalAvgInterval(),
+                    true
+                );
+                slowQuerySegregationManagers.put(connHash, manager);
+                log.info("Created SlowQuerySegregationManager for datasource {} with pool size {}", 
+                        connHash, actualPoolSize);
+            } else {
+                // Create disabled manager for consistency
+                SlowQuerySegregationManager manager = new SlowQuerySegregationManager(
+                    1, 0, 0, 0, 0, 0, false
+                );
+                slowQuerySegregationManagers.put(connHash, manager);
+                log.info("Created disabled SlowQuerySegregationManager for datasource {}", connHash);
+            }
         }
     }
     
@@ -1508,22 +1551,11 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                 request.getSession().getSessionUUID(), request.getXid(), request.getFlags());
         
         Session session = null;
-        XaTransactionLimiter xaLimiter = null;
-        boolean permitAcquired = false;
         
         try {
             session = sessionManager.getSession(request.getSession());
             if (session == null || !session.isXA() || session.getXaResource() == null) {
                 throw new SQLException("Session is not an XA session");
-            }
-            
-            // Acquire XA transaction permit before starting
-            String connHash = session.getConnectionHash();
-            xaLimiter = ((SessionManagerImpl) sessionManager).getXaLimiter(connHash);
-            if (xaLimiter != null) {
-                xaLimiter.acquire(); // This will block or timeout if limit reached
-                permitAcquired = true;
-                log.debug("XA transaction permit acquired for session {}", session.getSessionUUID());
             }
             
             javax.transaction.xa.Xid xid = convertXid(request.getXid());
@@ -1538,12 +1570,6 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             responseObserver.onCompleted();
 
         } catch (Exception e) {
-            // If we acquired a permit but the start failed, release it
-            if (permitAcquired && xaLimiter != null) {
-                xaLimiter.release();
-                log.debug("Released XA transaction permit due to start failure");
-            }
-            
             log.error("Error in xaStart", e);
             
             // Provide additional context for Oracle XA errors
@@ -1638,14 +1664,6 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             javax.transaction.xa.Xid xid = convertXid(request.getXid());
             session.getXaResource().commit(xid, request.getOnePhase());
             
-            // Release XA transaction permit after commit
-            String connHash = session.getConnectionHash();
-            XaTransactionLimiter xaLimiter = ((SessionManagerImpl) sessionManager).getXaLimiter(connHash);
-            if (xaLimiter != null) {
-                xaLimiter.release();
-                log.debug("Released XA transaction permit after commit for session {}", session.getSessionUUID());
-            }
-            
             com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
                     .setSession(session.getSessionInfo())
                     .setSuccess(true)
@@ -1674,14 +1692,6 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             
             javax.transaction.xa.Xid xid = convertXid(request.getXid());
             session.getXaResource().rollback(xid);
-            
-            // Release XA transaction permit after rollback
-            String connHash = session.getConnectionHash();
-            XaTransactionLimiter xaLimiter = ((SessionManagerImpl) sessionManager).getXaLimiter(connHash);
-            if (xaLimiter != null) {
-                xaLimiter.release();
-                log.debug("Released XA transaction permit after rollback for session {}", session.getSessionUUID());
-            }
             
             com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
                     .setSession(session.getSessionInfo())

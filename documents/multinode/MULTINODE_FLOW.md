@@ -631,3 +631,13 @@ MultinodeConnectionManager manager = new MultinodeConnectionManager(
     10000    // retryDelayMs: 10 seconds
 );
 ```
+
+## Related Documentation
+
+For XA transaction-specific multinode behavior:
+- [../xa/XA_MULTINODE_FAILOVER.md](../xa/XA_MULTINODE_FAILOVER.md) - XA transaction retry and failover for multinode deployments
+
+For general XA transaction information:
+- [../xa/XA_SUPPORT.md](../xa/XA_SUPPORT.md) - Basic XA transaction support
+- [../xa/XA_TRANSACTION_FLOW.md](../xa/XA_TRANSACTION_FLOW.md) - Detailed XA transaction flow
+- [../xa/ATOMIKOS_XA_INTEGRATION.md](../xa/ATOMIKOS_XA_INTEGRATION.md) - Atomikos integration guide

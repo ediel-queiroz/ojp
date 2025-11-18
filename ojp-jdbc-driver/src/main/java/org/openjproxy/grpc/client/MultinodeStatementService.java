@@ -818,6 +818,15 @@ public class MultinodeStatementService implements StatementService {
     }
     
     /**
+     * Phase 2: Gets the connection manager for registering health listeners.
+     * 
+     * @return The connection manager
+     */
+    public MultinodeConnectionManager getConnectionManager() {
+        return connectionManager;
+    }
+    
+    /**
      * Shuts down all connections managed by this service.
      */
     public void shutdown() {

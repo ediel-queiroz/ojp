@@ -1,10 +1,13 @@
 package org.openjproxy.jdbc.xa;
 
-import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.ProtoConverter;
+import org.openjproxy.grpc.client.MultinodeConnectionManager;
+import org.openjproxy.grpc.client.MultinodeStatementService;
+import org.openjproxy.grpc.client.ServerEndpoint;
+import org.openjproxy.grpc.client.ServerHealthListener;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.jdbc.ClientUUID;
 
@@ -26,9 +29,11 @@ import java.util.Properties;
  * 
  * <p>The server-side session is created lazily when first needed (either when getting
  * the XAResource or when getting a Connection), to avoid creating unnecessary sessions.
+ * 
+ * <p>Phase 2: Implements ServerHealthListener to handle server failures proactively.
  */
 @Slf4j
-public class OjpXAConnection implements XAConnection {
+public class OjpXAConnection implements XAConnection, ServerHealthListener {
 
     private final StatementService statementService;
     private SessionInfo sessionInfo; // Lazily initialized
@@ -39,15 +44,18 @@ public class OjpXAConnection implements XAConnection {
     private Connection logicalConnection;
     private OjpXAResource xaResource;
     private boolean closed = false;
+    private List<String> serverEndpoints;
     private final List<ConnectionEventListener> listeners = new ArrayList<>();
+    private String boundServerAddress; // Phase 2: Track which server this connection is bound to
 
-    public OjpXAConnection(StatementService statementService, String url, String user, String password, Properties properties) {
+    public OjpXAConnection(StatementService statementService, String url, String user, String password, Properties properties, List<String> serverEndpoints) {
         log.debug("Creating OjpXAConnection for URL: {}", url);
         this.statementService = statementService;
         this.url = url;
         this.user = user;
         this.password = password;
         this.properties = properties;
+        this.serverEndpoints = serverEndpoints;
         // Session is created lazily when needed
     }
     
@@ -68,7 +76,13 @@ public class OjpXAConnection implements XAConnection {
                     .setPassword(password != null ? password : "")
                     .setClientUUID(ClientUUID.getUUID())
                     .setIsXA(true);  // Mark this as an XA connection
-            
+
+            // Add server endpoints list for multinode coordination
+            if (serverEndpoints != null && !serverEndpoints.isEmpty()) {
+                connBuilder.addAllServerEndpoints(serverEndpoints);
+                log.info("Adding {} server endpoints to ConnectionDetails for multinode coordination", serverEndpoints.size());
+            }
+
             if (properties != null && !properties.isEmpty()) {
                 Map<String, Object> propertiesMap = new HashMap<>();
                 for (String key : properties.stringPropertyNames()) {
@@ -78,6 +92,13 @@ public class OjpXAConnection implements XAConnection {
             }
 
             this.sessionInfo = statementService.connect(connBuilder.build());
+            
+            // Phase 2: Track the bound server from session info
+            if (sessionInfo.getTargetServer() != null && !sessionInfo.getTargetServer().isEmpty()) {
+                this.boundServerAddress = sessionInfo.getTargetServer();
+                log.debug("XA connection bound to server: {}", boundServerAddress);
+            }
+            
             log.debug("XA connection established with session: {}", sessionInfo.getSessionUUID());
             return sessionInfo;
 
@@ -85,6 +106,26 @@ public class OjpXAConnection implements XAConnection {
             log.error("Failed to create XA connection session", e);
             throw new SQLException("Failed to create XA connection session", e);
         }
+    }
+    
+    /**
+     * Phase 1: Recreates the session on a different server.
+     * Used for retry logic when the bound server fails.
+     * 
+     * @return The new SessionInfo
+     * @throws SQLException if session recreation fails
+     */
+    synchronized SessionInfo recreateSession() throws SQLException {
+        log.info("Recreating XA session (previous session: {})", 
+                sessionInfo != null ? sessionInfo.getSessionUUID() : "none");
+        
+        // Clear existing session
+        sessionInfo = null;
+        boundServerAddress = null;
+        xaResource = null; // Force recreation of XAResource with new session
+        
+        // Create new session (will use round-robin to select a different server)
+        return getOrCreateSession();
     }
 
     @Override
@@ -94,7 +135,7 @@ public class OjpXAConnection implements XAConnection {
         if (xaResource == null) {
             // Lazily create session when XAResource is first requested
             SessionInfo session = getOrCreateSession();
-            xaResource = new OjpXAResource(statementService, session);
+            xaResource = new OjpXAResource(statementService, session, this); // Phase 1: Pass this connection to XAResource
         }
         return xaResource;
     }
@@ -122,7 +163,39 @@ public class OjpXAConnection implements XAConnection {
         
         // Create a new logical connection that uses the same XA session on the server
         logicalConnection = new OjpXALogicalConnection(this, session, url);
+        
+        // Register with ConnectionTracker if using multinode
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null && boundServerAddress != null) {
+                // Find the ServerEndpoint for the bound server
+                ServerEndpoint boundEndpoint = findServerEndpoint(connectionManager, boundServerAddress);
+                if (boundEndpoint != null) {
+                    connectionManager.getConnectionTracker().register(logicalConnection, boundEndpoint);
+                    log.debug("Registered connection with tracker for server: {}", boundServerAddress);
+                }
+            }
+        }
+        
         return logicalConnection;
+    }
+    
+    /**
+     * Find the ServerEndpoint matching the bound server address.
+     */
+    private ServerEndpoint findServerEndpoint(MultinodeConnectionManager connectionManager, String serverAddress) {
+        try {
+            // The connectionManager has access to all server endpoints
+            // We need to find the one matching our boundServerAddress
+            // For now, return null as we don't have direct access to the endpoint list
+            // This will be enhanced in Phase 4
+            log.debug("Finding server endpoint for address: {}", serverAddress);
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to find server endpoint for {}: {}", serverAddress, e.getMessage());
+            return null;
+        }
     }
     
     /**
@@ -140,6 +213,16 @@ public class OjpXAConnection implements XAConnection {
         }
         
         closed = true;
+        
+        // Unregister from ConnectionTracker if registered
+        if (logicalConnection != null && statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null) {
+                connectionManager.getConnectionTracker().unregister(logicalConnection);
+                log.debug("Unregistered connection from tracker");
+            }
+        }
         
         // Close logical connection if open
         if (logicalConnection != null && !logicalConnection.isClosed()) {
@@ -187,26 +270,40 @@ public class OjpXAConnection implements XAConnection {
         // Not supported for XA connections
     }
 
-    /**
-     * Notify listeners of a connection error.
-     */
-    void notifyError(SQLException exception) {
-        ConnectionEvent event = new ConnectionEvent(this, exception);
-        for (ConnectionEventListener listener : listeners) {
-            listener.connectionErrorOccurred(event);
-        }
-    }
-
-    /**
-     * Get the session info for this XA connection.
-     */
-    SessionInfo getSessionInfo() {
-        return sessionInfo;
-    }
-
     private void checkClosed() throws SQLException {
         if (closed) {
             throw new SQLException("XA Connection is closed");
         }
+    }
+    
+    /**
+     * Phase 2: Called when a server becomes unhealthy.
+     * If this connection is bound to that server, close it proactively
+     * so Atomikos will create a new connection.
+     */
+    @Override
+    public void onServerUnhealthy(ServerEndpoint endpoint, Exception exception) {
+        String serverAddr = endpoint.getHost() + ":" + endpoint.getPort();
+        
+        // Check if this connection is bound to the failed server
+        if (boundServerAddress != null && boundServerAddress.equals(serverAddr)) {
+            log.warn("XA connection bound to unhealthy server {}, closing connection proactively", serverAddr);
+            try {
+                // Close this connection - Atomikos will remove it from pool and create a new one
+                close();
+            } catch (SQLException e) {
+                log.error("Error closing XA connection after server failure: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Phase 2: Called when a server recovers.
+     * No action needed for individual connections.
+     */
+    @Override
+    public void onServerRecovered(ServerEndpoint endpoint) {
+        // No action needed - new connections will naturally use recovered servers
+        log.debug("Server {} recovered", endpoint.getAddress());
     }
 }

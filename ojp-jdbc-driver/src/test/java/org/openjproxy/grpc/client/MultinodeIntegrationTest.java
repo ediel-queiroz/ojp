@@ -30,7 +30,7 @@ public class MultinodeIntegrationTest {
     private static final int THREADS = 30; // Number of worker threads
     private static final int RAMPUP_MS = 120 * 1000; // 120 seconds Ramp-up window in milliseconds
 
-    private static boolean isTestDisabled;
+    protected static boolean isTestDisabled;
     private static Queue<Long> queryDurations = new ConcurrentLinkedQueue<>();
     private static AtomicInteger totalQueries = new AtomicInteger(0);
     private static AtomicInteger failedQueries = new AtomicInteger(0);
@@ -38,7 +38,10 @@ public class MultinodeIntegrationTest {
 
     @BeforeAll
     public static void checkTestConfiguration() {
-        isTestDisabled = !Boolean.parseBoolean(System.getProperty("multinodeTestsEnabled", "false"));
+        // Check both system property and environment variable
+        boolean sysPropEnabled = Boolean.parseBoolean(System.getProperty("multinodeTestsEnabled", "false"));
+        boolean envVarEnabled = Boolean.parseBoolean(System.getenv("MULTINODE_TESTS_ENABLED"));
+        isTestDisabled = !(sysPropEnabled || envVarEnabled);
     }
 
     @SneakyThrows
@@ -182,7 +185,7 @@ public class MultinodeIntegrationTest {
      * All queries are coded individually and marked if part of a transaction.
      */
     @SneakyThrows
-    private static Connection getConnection(String driverClass, String url, String user, String password) throws SQLException {
+    protected static Connection getConnection(String driverClass, String url, String user, String password) throws SQLException {
         Class.forName(driverClass);
         //Commented code below is useful for comparison tests with using HikariCP directly, without OJP
         /*if (ds == null) {

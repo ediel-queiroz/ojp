@@ -1,0 +1,89 @@
+package org.openjproxy.jdbc;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
+/**
+ * Utility class for loading datasource-specific properties from ojp.properties file.
+ * Shared by Driver, OjpXADataSource, and MultinodeConnectionManager to avoid code duplication.
+ */
+@Slf4j
+public class DatasourcePropertiesLoader {
+
+    /**
+     * Load ojp.properties and extract configuration specific to the given dataSource.
+     * 
+     * @param dataSourceName The datasource name to load properties for
+     * @return Properties for the specified datasource, or null if none found
+     */
+    public static Properties loadOjpPropertiesForDataSource(String dataSourceName) {
+        Properties allProperties = loadOjpProperties();
+        if (allProperties == null || allProperties.isEmpty()) {
+            return null;
+        }
+        
+        Properties dataSourceProperties = new Properties();
+        
+        // Look for dataSource-prefixed properties first: {dataSourceName}.ojp.connection.pool.*
+        String prefix = dataSourceName + ".ojp.connection.pool.";
+        boolean foundDataSourceSpecific = false;
+        
+        for (String key : allProperties.stringPropertyNames()) {
+            if (key.startsWith(prefix)) {
+                // Remove the dataSource prefix and keep the standard property name
+                String standardKey = key.substring(dataSourceName.length() + 1); // Remove "{dataSourceName}."
+                dataSourceProperties.setProperty(standardKey, allProperties.getProperty(key));
+                foundDataSourceSpecific = true;
+            }
+        }
+        
+        // If no dataSource-specific properties found, and this is the "default" dataSource,
+        // look for unprefixed properties: ojp.connection.pool.*
+        if (!foundDataSourceSpecific && "default".equals(dataSourceName)) {
+            for (String key : allProperties.stringPropertyNames()) {
+                if (key.startsWith("ojp.connection.pool.")) {
+                    dataSourceProperties.setProperty(key, allProperties.getProperty(key));
+                }
+            }
+        }
+        
+        // If we found any properties, also include the dataSource name as a single property
+        // Note: The dataSource-prefixed properties (e.g., "webApp.ojp.connection.pool.*") 
+        // are sent to the server with their prefixes removed (e.g., "ojp.connection.pool.*"),
+        // and the dataSource name itself is sent separately as "ojp.datasource.name"
+        if (!dataSourceProperties.isEmpty()) {
+            dataSourceProperties.setProperty("ojp.datasource.name", dataSourceName);
+        }
+        
+        log.debug("Loaded {} properties for dataSource '{}': {}", 
+                dataSourceProperties.size(), dataSourceName, dataSourceProperties);
+        
+        return dataSourceProperties.isEmpty() ? null : dataSourceProperties;
+    }
+
+    /**
+     * Load the raw ojp.properties file from classpath.
+     * 
+     * @return All properties from ojp.properties file, or null if not found
+     */
+    public static Properties loadOjpProperties() {
+        Properties properties = new Properties();
+        
+        // Only try to load from resources/ojp.properties in the classpath
+        try (InputStream is = DatasourcePropertiesLoader.class.getClassLoader().getResourceAsStream("ojp.properties")) {
+            if (is != null) {
+                properties.load(is);
+                log.debug("Loaded ojp.properties from resources folder");
+                return properties;
+            }
+        } catch (IOException e) {
+            log.debug("Could not load ojp.properties from resources folder: {}", e.getMessage());
+        }
+        
+        log.debug("No ojp.properties file found, using server defaults");
+        return null;
+    }
+}

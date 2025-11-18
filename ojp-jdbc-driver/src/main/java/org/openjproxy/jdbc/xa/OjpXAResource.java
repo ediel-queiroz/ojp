@@ -2,7 +2,10 @@ package org.openjproxy.jdbc.xa;
 
 import com.google.protobuf.ByteString;
 import com.openjproxy.grpc.*;
+import io.grpc.StatusRuntimeException;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.client.MultinodeConnectionManager;
+import org.openjproxy.grpc.client.MultinodeStatementService;
 import org.openjproxy.grpc.client.StatementService;
 
 import javax.transaction.xa.XAException;
@@ -12,40 +15,152 @@ import java.sql.SQLException;
 
 /**
  * Implementation of XAResource that delegates all operations to the OJP server via StatementService.
+ * 
+ * Phase 1: Implements retry logic for xaStart() to handle server failures gracefully.
  */
 @Slf4j
 public class OjpXAResource implements XAResource {
 
     private final StatementService statementService;
-    private final SessionInfo sessionInfo;
-    private int transactionTimeout = 0;
+    private SessionInfo sessionInfo;
+    private final OjpXAConnection xaConnection; // Phase 1: Reference to parent connection for session recreation
 
-    public OjpXAResource(StatementService statementService, SessionInfo sessionInfo) {
+    public OjpXAResource(StatementService statementService, SessionInfo sessionInfo, OjpXAConnection xaConnection) {
         this.statementService = statementService;
         this.sessionInfo = sessionInfo;
+        this.xaConnection = xaConnection;
     }
 
     @Override
     public void start(Xid xid, int flags) throws XAException {
         log.debug("start: xid={}, flags={}", xid, flags);
-        try {
-            XaStartRequest request = XaStartRequest.newBuilder()
-                    .setSession(sessionInfo)
-                    .setXid(toXidProto(xid))
-                    .setFlags(flags)
-                    .build();
-            XaResponse response = statementService.xaStart(request);
-            if (!response.getSuccess()) {
-                throw new XAException(response.getMessage());
+        
+        // Phase 1: Implement retry logic for xaStart
+        // Safe to retry because no transaction state exists yet
+        int maxRetries = getMaxRetries();
+        int attempt = 0;
+        XAException lastException = null;
+        
+        while (attempt < maxRetries) {
+            try {
+                XaStartRequest request = XaStartRequest.newBuilder()
+                        .setSession(sessionInfo)
+                        .setXid(toXidProto(xid))
+                        .setFlags(flags)
+                        .build();
+                XaResponse response = statementService.xaStart(request);
+                if (!response.getSuccess()) {
+                    throw new XAException(response.getMessage());
+                }
+                
+                // Success - return immediately
+                if (attempt > 0) {
+                    log.info("xaStart succeeded on retry attempt {}", attempt);
+                }
+                return;
+                
+            } catch (XAException e) {
+                throw e; // XA-level errors are not retryable
+            } catch (Exception e) {
+                // Check if this is a connection-level error
+                boolean isConnectionError = isConnectionLevelError(e);
+                
+                if (!isConnectionError) {
+                    // Database-level error - don't retry
+                    log.error("Database-level error in start (not retrying)", e);
+                    XAException xae = new XAException(XAException.XAER_RMERR);
+                    xae.initCause(e);
+                    throw xae;
+                }
+                
+                // Connection-level error - can retry
+                lastException = new XAException(XAException.XAER_RMFAIL);
+                lastException.initCause(e);
+                
+                attempt++;
+                
+                if (attempt < maxRetries) {
+                    log.warn("xaStart failed with connection error (attempt {}/{}): {}. Attempting to recreate session...", 
+                            attempt, maxRetries, e.getMessage());
+                    
+                    try {
+                        // Recreate session on a different server
+                        this.sessionInfo = xaConnection.recreateSession();
+                        log.info("Session recreated successfully on attempt {}", attempt);
+                    } catch (SQLException recreateEx) {
+                        log.error("Failed to recreate session on attempt {}: {}", attempt, recreateEx.getMessage());
+                        // Continue to next retry if we have attempts left
+                    }
+                } else {
+                    log.error("xaStart failed after {} attempts", maxRetries, e);
+                }
             }
-        } catch (XAException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in start", e);
-            XAException xae = new XAException(XAException.XAER_RMERR);
-            xae.initCause(e);
-            throw xae;
         }
+        
+        // All retries exhausted
+        throw lastException;
+    }
+    
+    /**
+     * Phase 1: Get the maximum number of retries for xaStart.
+     * Returns the number of healthy servers available, or 3 as a fallback.
+     */
+    private int getMaxRetries() {
+        if (statementService instanceof MultinodeStatementService) {
+            MultinodeStatementService multinodeService = (MultinodeStatementService) statementService;
+            MultinodeConnectionManager connectionManager = multinodeService.getConnectionManager();
+            if (connectionManager != null) {
+                long healthyServerCount = connectionManager.getServerEndpoints().stream()
+                        .filter(endpoint -> endpoint.isHealthy())
+                        .count();
+                // Try at least once per healthy server, minimum of 1
+                return Math.max(1, (int) healthyServerCount);
+            }
+        }
+        // Default: try 3 times
+        return 3;
+    }
+    
+    /**
+     * Phase 1: Determines if an exception represents a connection-level error.
+     * Uses the same logic as MultinodeConnectionManager.isConnectionLevelError().
+     */
+    private boolean isConnectionLevelError(Exception exception) {
+        if (exception instanceof StatusRuntimeException) {
+            StatusRuntimeException statusException = (StatusRuntimeException) exception;
+            io.grpc.Status.Code code = statusException.getStatus().getCode();
+            
+            // Only these status codes indicate connection-level failures
+            return code == io.grpc.Status.Code.UNAVAILABLE ||
+                   code == io.grpc.Status.Code.DEADLINE_EXCEEDED ||
+                   code == io.grpc.Status.Code.CANCELLED ||
+                   (code == io.grpc.Status.Code.UNKNOWN && 
+                    statusException.getMessage() != null && 
+                    (statusException.getMessage().contains("connection") || 
+                     statusException.getMessage().contains("Connection")));
+        }
+        
+        // Check for SQLException with connection-related messages
+        if (exception instanceof SQLException) {
+            String message = exception.getMessage();
+            if (message != null) {
+                String lowerMessage = message.toLowerCase();
+                return lowerMessage.contains("server") && lowerMessage.contains("unavailable") ||
+                       lowerMessage.contains("connection") ||
+                       lowerMessage.contains("timeout");
+            }
+        }
+        
+        // For non-gRPC exceptions, check for connection-related keywords
+        String message = exception.getMessage();
+        if (message != null) {
+            String lowerMessage = message.toLowerCase();
+            return lowerMessage.contains("connection") || 
+                   lowerMessage.contains("timeout") ||
+                   lowerMessage.contains("unavailable");
+        }
+        
+        return false; // Default to not retrying for unknown errors
     }
 
     @Override
@@ -185,9 +300,6 @@ public class OjpXAResource implements XAResource {
                     .setSeconds(seconds)
                     .build();
             XaSetTransactionTimeoutResponse response = statementService.xaSetTransactionTimeout(request);
-            if (response.getSuccess()) {
-                this.transactionTimeout = seconds;
-            }
             return response.getSuccess();
         } catch (Exception e) {
             log.error("Error in setTransactionTimeout", e);

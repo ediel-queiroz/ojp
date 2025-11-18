@@ -1,11 +1,14 @@
 package org.openjproxy.grpc.client;
 
+import lombok.Getter;
 import org.openjproxy.constants.CommonConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -23,14 +26,105 @@ public class MultinodeUrlParser {
     private static final Logger log = LoggerFactory.getLogger(MultinodeUrlParser.class);
     private static final Pattern OJP_PATTERN = Pattern.compile(CommonConstants.OJP_REGEX_PATTERN);
 
+    // Cache of statement services keyed by server configuration
+    private static final Map<String, StatementService> statementServiceCache = new ConcurrentHashMap<>();
+
+
+    /**
+     * Helper class to return the service, connection URL, server endpoints, and datasource names.
+     */
+    @Getter
+    public static class ServiceAndUrl {
+        final StatementService service;
+        final String connectionUrl;
+        final List<String> serverEndpoints;
+        final List<ServerEndpoint> serverEndpointsWithDatasources;
+
+        ServiceAndUrl(StatementService service, String connectionUrl, List<String> serverEndpoints, List<ServerEndpoint> serverEndpointsWithDatasources) {
+            this.service = service;
+            this.connectionUrl = connectionUrl;
+            this.serverEndpoints = serverEndpoints;
+            this.serverEndpointsWithDatasources = serverEndpointsWithDatasources;
+        }
+    }
+
+    /**
+     * Gets or creates a StatementService implementation based on the URL.
+     * Returns both the service and the connection URL (which may be modified for multinode).
+     * For multinode URLs, creates a MultinodeStatementService with load balancing and failover.
+     * For single-node URLs, creates a StatementServiceGrpcClient.
+     * 
+     * @param url the JDBC URL (should be already cleaned of datasource names)
+     * @param dataSourceNames optional list of datasource names corresponding to each endpoint
+     */
+    public synchronized static ServiceAndUrl getOrCreateStatementService(String url, List<String> dataSourceNames) {
+        try {
+            // Try to parse as multinode URL
+            List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url, dataSourceNames);
+
+            if (endpoints.size() > 1) {
+                // Multinode configuration detected - use MultinodeStatementService
+                log.info("Multinode URL detected with {} endpoints: {}",
+                        endpoints.size(), MultinodeUrlParser.formatServerList(endpoints));
+
+                // Create a cache key based on all endpoints to ensure same config reuses same service
+                String cacheKey = "multinode:" + MultinodeUrlParser.formatServerList(endpoints);
+                StatementService service = statementServiceCache.computeIfAbsent(cacheKey, k -> {
+                    log.debug("Creating MultinodeStatementService for endpoints: {}",
+                            MultinodeUrlParser.formatServerList(endpoints));
+                    MultinodeConnectionManager connectionManager = new MultinodeConnectionManager(endpoints);
+                    return new MultinodeStatementService(connectionManager, url);
+                });
+
+                // For multinode, we need to pass a URL that can be parsed by the server
+                // Use the original URL with the first endpoint for connection metadata
+                String connectionUrl = MultinodeUrlParser.replaceBracketsWithSingleEndpoint(url, endpoints.get(0));
+
+                // Convert ServerEndpoint list to string list (host:port format)
+                List<String> serverEndpointStrings = endpoints.stream()
+                        .map(ep -> ep.getHost() + ":" + ep.getPort())
+                        .collect(java.util.stream.Collectors.toList());
+
+                return new ServiceAndUrl(service, connectionUrl, serverEndpointStrings, endpoints);
+            } else {
+                // Single-node configuration - use traditional client
+                String cacheKey = "single:" + endpoints.get(0).getAddress();
+                StatementService service = statementServiceCache.computeIfAbsent(cacheKey, k -> {
+                    log.debug("Creating StatementServiceGrpcClient for single-node");
+                    return new StatementServiceGrpcClient();
+                });
+
+                return new ServiceAndUrl(service, url, null, endpoints);
+            }
+        } catch (IllegalArgumentException e) {
+            // URL parsing failed, fall back to single-node client
+            log.debug("URL not recognized as multinode format, using single-node client: {}", e.getMessage());
+            StatementService service = statementServiceCache.computeIfAbsent("default", k -> {
+                log.debug("Creating default StatementServiceGrpcClient");
+                return new StatementServiceGrpcClient();
+            });
+
+            return new ServiceAndUrl(service, url, null, null);
+        }
+    }
+
+    /**
+     * Gets or creates a StatementService implementation based on the URL.
+     * Backward compatibility method without datasource names.
+     */
+    public synchronized static ServiceAndUrl getOrCreateStatementService(String url) {
+        return getOrCreateStatementService(url, null);
+    }
+
     /**
      * Parses an OJP URL and extracts server endpoints.
      * 
      * @param url The OJP JDBC URL to parse
+     * @param dataSourceNames Optional list of datasource names corresponding to each endpoint
      * @return List of server endpoints
      * @throws IllegalArgumentException if URL format is invalid
      */
-    public static List<ServerEndpoint> parseServerEndpoints(String url) {
+    public static List<ServerEndpoint> parseServerEndpoints(String url, List<String> dataSourceNames) {
         if (url == null) {
             throw new IllegalArgumentException("URL cannot be null");
         }
@@ -46,8 +140,8 @@ public class MultinodeUrlParser {
         // Split by comma to support multinode
         String[] serverAddresses = serverListString.split(",");
 
-        for (String address : serverAddresses) {
-            address = address.trim();
+        for (int i = 0; i < serverAddresses.length; i++) {
+            String address = serverAddresses[i].trim();
             if (address.isEmpty()) {
                 continue;
             }
@@ -69,7 +163,12 @@ public class MultinodeUrlParser {
                 throw new IllegalArgumentException("Port number must be between 1 and 65535. Got: " + port);
             }
 
-            endpoints.add(new ServerEndpoint(host, port));
+            // Get datasource name for this endpoint if provided
+            String dataSourceName = (dataSourceNames != null && i < dataSourceNames.size()) 
+                ? dataSourceNames.get(i) 
+                : "default";
+
+            endpoints.add(new ServerEndpoint(host, port, dataSourceName));
         }
 
         if (endpoints.isEmpty()) {
@@ -77,9 +176,21 @@ public class MultinodeUrlParser {
         }
 
         log.debug("Parsed {} server endpoints from URL: {}", endpoints.size(),
-                endpoints.stream().map(ServerEndpoint::getAddress).collect(Collectors.toList()));
+                endpoints.stream().map(ep -> ep.getAddress() + "(" + ep.getDataSourceName() + ")").collect(Collectors.toList()));
 
         return endpoints;
+    }
+
+    /**
+     * Parses an OJP URL and extracts server endpoints.
+     * Backward compatibility method without datasource names.
+     * 
+     * @param url The OJP JDBC URL to parse
+     * @return List of server endpoints
+     * @throws IllegalArgumentException if URL format is invalid
+     */
+    public static List<ServerEndpoint> parseServerEndpoints(String url) {
+        return parseServerEndpoints(url, null);
     }
 
     /**
