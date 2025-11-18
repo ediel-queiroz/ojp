@@ -381,7 +381,7 @@ Required Maven dependencies (automatically included):
 ## Multinode XA Deployments
 
 For information on XA transaction retry and failover in multinode deployments, see:
-- [documents/XA_MULTINODE_FAILOVER.md](documents/XA_MULTINODE_FAILOVER.md) - Comprehensive guide to automatic retry and failover for XA transactions when OJP servers fail in multinode clusters
+- [XA_MULTINODE_FAILOVER.md](XA_MULTINODE_FAILOVER.md) - Comprehensive guide to automatic retry and failover for XA transactions when OJP servers fail in multinode clusters
 
 Key features:
 - Automatic retry of `xaStart()` operations when servers fail
@@ -394,4 +394,4 @@ Key features:
 - [Atomikos Documentation](https://www.atomikos.com/Documentation/)
 - [JTA Specification](https://jcp.org/en/jsr/detail?id=907)
 - [XA Transactions](https://en.wikipedia.org/wiki/X/Open_XA)
-- [documents/XA_MULTINODE_FAILOVER.md](documents/XA_MULTINODE_FAILOVER.md) - Multinode failover guide
+- [XA_MULTINODE_FAILOVER.md](XA_MULTINODE_FAILOVER.md) - Multinode failover guide

@@ -576,9 +576,9 @@ Possible improvements for future versions:
 - [XA Specification](https://pubs.opengroup.org/onlinepubs/009680699/toc.pdf) - Open Group XA Standard
 - [JTA Specification](https://jcp.org/en/jsr/detail?id=907) - Java Transaction API
 - [Atomikos Documentation](https://www.atomikos.com/Documentation/) - Transaction Manager
-- [documents/XA_TRANSACTION_FLOW.md](XA_TRANSACTION_FLOW.md) - Detailed XA flow in OJP
-- [documents/XA_SUPPORT.md](XA_SUPPORT.md) - Basic XA support documentation
-- [ATOMIKOS_XA_INTEGRATION.md](../ATOMIKOS_XA_INTEGRATION.md) - Atomikos integration guide
+- [XA_TRANSACTION_FLOW.md](XA_TRANSACTION_FLOW.md) - Detailed XA flow in OJP
+- [XA_SUPPORT.md](XA_SUPPORT.md) - Basic XA support documentation
+- [ATOMIKOS_XA_INTEGRATION.md](ATOMIKOS_XA_INTEGRATION.md) - Atomikos integration guide
 
 ## Support
 
