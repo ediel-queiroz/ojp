@@ -10,8 +10,8 @@ import java.util.stream.Collectors;
 
 /**
  * Redistributes XA connections across recovered servers to rebalance load.
- * Uses ConnectionTracker to identify idle connections and selectively closes them
- * based on configured thresholds.
+ * Uses ConnectionTracker to identify idle connections and marks them as invalid
+ * so connection pools can replace them naturally, ensuring proper session cleanup.
  */
 @Slf4j
 public class XAConnectionRedistributor {
@@ -27,8 +27,9 @@ public class XAConnectionRedistributor {
     
     /**
      * Rebalances connections when servers recover.
-     * Closes a subset of idle connections on overloaded servers to allow natural
-     * redistribution through connection pool recreation.
+     * Marks a subset of idle connections on overloaded servers as invalid,
+     * allowing connection pools to detect them via isValid() and replace them
+     * naturally. This ensures proper session termination on the server side.
      * 
      * @param recoveredServers List of servers that have just recovered
      * @param allHealthyServers List of all currently healthy servers (including recovered ones)
@@ -70,10 +71,10 @@ public class XAConnectionRedistributor {
             
             // Identify overloaded servers (servers with more than their fair share)
             double idleRebalanceFraction = healthConfig.getIdleRebalanceFraction();
-            int maxClosePerRecovery = healthConfig.getMaxClosePerRecovery();
-            int totalClosed = 0;
+            int maxMarkPerRecovery = healthConfig.getMaxClosePerRecovery();
+            int totalMarked = 0;
             
-            // Sort servers by connection count (descending) to close from most loaded first
+            // Sort servers by connection count (descending) to mark from most loaded first
             List<String> overloadedServers = connectionsByServer.entrySet().stream()
                     .filter(entry -> entry.getValue().size() > targetPerServer)
                     .sorted((e1, e2) -> Integer.compare(e2.getValue().size(), e1.getValue().size()))
@@ -83,43 +84,38 @@ public class XAConnectionRedistributor {
             log.info("Found {} overloaded server(s)", overloadedServers.size());
             
             for (String serverAddress : overloadedServers) {
-                if (totalClosed >= maxClosePerRecovery) {
-                    log.info("Reached max close limit ({}), stopping redistribution", maxClosePerRecovery);
+                if (totalMarked >= maxMarkPerRecovery) {
+                    log.info("Reached max mark limit ({}), stopping redistribution", maxMarkPerRecovery);
                     break;
                 }
                 
                 List<ConnectionTracker.ConnectionInfo> serverConnections = connectionsByServer.get(serverAddress);
                 int excessConnections = serverConnections.size() - targetPerServer;
-                int toClose = (int) Math.ceil(excessConnections * idleRebalanceFraction);
-                toClose = Math.min(toClose, maxClosePerRecovery - totalClosed);
+                int toMark = (int) Math.ceil(excessConnections * idleRebalanceFraction);
+                toMark = Math.min(toMark, maxMarkPerRecovery - totalMarked);
                 
-                if (toClose <= 0) {
+                if (toMark <= 0) {
                     continue;
                 }
                 
-                log.info("Server {} has {} connections ({} excess), closing {} idle connections", 
-                        serverAddress, serverConnections.size(), excessConnections, toClose);
+                log.info("Server {} has {} connections ({} excess), marking {} idle connections as invalid", 
+                        serverAddress, serverConnections.size(), excessConnections, toMark);
                 
-                // Sort by last used time (oldest first) and close idle connections
+                // Sort by last used time (oldest first) and mark idle connections as invalid
                 List<ConnectionTracker.ConnectionInfo> idleConnections = serverConnections.stream()
                         .sorted(Comparator.comparingLong(ConnectionTracker.ConnectionInfo::getLastUsedTime))
-                        .limit(toClose)
+                        .limit(toMark)
                         .collect(Collectors.toList());
                 
                 for (ConnectionTracker.ConnectionInfo connInfo : idleConnections) {
-                    try {
-                        tracker.closeIdleConnection(connInfo.getConnectionUUID());
-                        totalClosed++;
-                        log.debug("Closed idle connection {} from server {}", 
-                                connInfo.getConnectionUUID(), serverAddress);
-                    } catch (SQLException e) {
-                        log.warn("Failed to close connection {}: {}", 
-                                connInfo.getConnectionUUID(), e.getMessage());
-                    }
+                    tracker.markConnectionInvalid(connInfo.getConnectionUUID());
+                    totalMarked++;
+                    log.debug("Marked idle connection {} from server {} as invalid", 
+                            connInfo.getConnectionUUID(), serverAddress);
                 }
             }
             
-            log.info("XA connection redistribution complete: closed {} connections", totalClosed);
+            log.info("XA connection redistribution complete: marked {} connections as invalid for pool replacement", totalMarked);
             
         } catch (Exception e) {
             log.error("Error during XA connection redistribution: {}", e.getMessage(), e);

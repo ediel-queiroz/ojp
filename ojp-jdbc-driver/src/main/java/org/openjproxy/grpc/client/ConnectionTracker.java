@@ -177,35 +177,35 @@ public class ConnectionTracker {
     }
     
     /**
-     * Closes an idle XA connection by its UUID.
-     * This is called by the redistributor to selectively close connections for rebalancing.
+     * Marks an XA connection as invalid by its UUID.
+     * This causes the connection pool to naturally replace it without
+     * disrupting the server-side session immediately. The pool's validation
+     * mechanism will detect the invalid connection and close it properly,
+     * triggering session termination.
      * 
-     * @param connectionUUID The UUID of the connection to close
-     * @throws SQLException if the connection cannot be closed
+     * @param connectionUUID The UUID of the connection to mark invalid
      */
-    public void closeIdleConnection(String connectionUUID) throws SQLException {
+    public void markConnectionInvalid(String connectionUUID) {
         // Find the connection by UUID (using identity hash code)
-        Connection toClose = null;
+        Connection toMark = null;
         for (Connection conn : connectionToServerMap.keySet()) {
             if (String.valueOf(System.identityHashCode(conn)).equals(connectionUUID)) {
-                toClose = conn;
+                toMark = conn;
                 break;
             }
         }
         
-        if (toClose != null) {
-            try {
-                // Remove from tracking first
-                connectionToServerMap.remove(toClose);
-                // Close the connection
-                toClose.close();
-                log.debug("Closed idle connection {}", connectionUUID);
-            } catch (SQLException e) {
-                log.error("Failed to close connection {}: {}", connectionUUID, e.getMessage());
-                throw e;
+        if (toMark != null) {
+            // Cast to OJP Connection to access markForceInvalid method
+            if (toMark instanceof org.openjproxy.jdbc.Connection) {
+                ((org.openjproxy.jdbc.Connection) toMark).markForceInvalid();
+                log.debug("Marked connection {} as invalid for pool replacement", connectionUUID);
+            } else {
+                log.warn("Connection {} is not an OJP Connection, cannot mark invalid", connectionUUID);
             }
+            // Note: Don't remove from tracker - let the pool handle cleanup via unregister()
         } else {
-            log.warn("Connection {} not found for closing", connectionUUID);
+            log.warn("Connection {} not found for marking invalid", connectionUUID);
         }
     }
 }
