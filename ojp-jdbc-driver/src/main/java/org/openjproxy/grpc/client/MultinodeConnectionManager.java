@@ -530,17 +530,20 @@ public class MultinodeConnectionManager {
                 .filter(ServerEndpoint::isHealthy)
                 .collect(Collectors.toList());
         
-        // Always attempt to recover unhealthy servers if retry delay has passed
-        // This ensures we try to bring back downed servers even when others are healthy
-        attemptServerRecovery();
-        
-        // Re-check healthy servers after recovery attempt
-        healthyServers = serverEndpoints.stream()
-                .filter(ServerEndpoint::isHealthy)
-                .collect(Collectors.toList());
+        // Only attempt recovery if NO servers are healthy (last resort)
+        // Time-based health checks via tryTriggerHealthCheck() handle recovery for normal cases
+        if (healthyServers.isEmpty()) {
+            log.warn("No healthy servers available, attempting recovery as last resort");
+            attemptServerRecovery();
+            
+            // Re-check healthy servers after recovery attempt
+            healthyServers = serverEndpoints.stream()
+                    .filter(ServerEndpoint::isHealthy)
+                    .collect(Collectors.toList());
+        }
         
         if (healthyServers.isEmpty()) {
-            log.error("No healthy servers available");
+            log.error("No healthy servers available after recovery attempt");
             return null;
         }
         
