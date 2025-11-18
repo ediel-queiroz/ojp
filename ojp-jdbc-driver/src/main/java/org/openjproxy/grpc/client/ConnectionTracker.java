@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -123,5 +124,88 @@ public class ConnectionTracker {
         int count = connectionToServerMap.size();
         connectionToServerMap.clear();
         log.info("Cleared {} tracked connections", count);
+    }
+    
+    /**
+     * Inner class to hold connection information for redistribution.
+     */
+    public static class ConnectionInfo {
+        private final String connectionUUID;
+        private final String boundServerAddress;
+        private final long lastUsedTime;
+        
+        public ConnectionInfo(String connectionUUID, String boundServerAddress, long lastUsedTime) {
+            this.connectionUUID = connectionUUID;
+            this.boundServerAddress = boundServerAddress;
+            this.lastUsedTime = lastUsedTime;
+        }
+        
+        public String getConnectionUUID() {
+            return connectionUUID;
+        }
+        
+        public String getBoundServerAddress() {
+            return boundServerAddress;
+        }
+        
+        public long getLastUsedTime() {
+            return lastUsedTime;
+        }
+    }
+    
+    /**
+     * Gets all XA connections with their metadata for redistribution.
+     * Returns a list of ConnectionInfo objects containing UUID, server address, and last used time.
+     * 
+     * @return List of ConnectionInfo for all tracked XA connections
+     */
+    public List<ConnectionInfo> getAllXAConnections() {
+        // For now, return all connections as we don't distinguish between XA and non-XA
+        // In a full implementation, we would filter by connection type
+        return connectionToServerMap.entrySet().stream()
+                .map(entry -> {
+                    Connection conn = entry.getKey();
+                    ServerEndpoint server = entry.getValue();
+                    // Use System.identityHashCode as a simple UUID proxy
+                    String uuid = String.valueOf(System.identityHashCode(conn));
+                    String serverAddr = server.getHost() + ":" + server.getPort();
+                    // For now, use current time - in a full implementation, track actual last used time
+                    long lastUsed = System.currentTimeMillis();
+                    return new ConnectionInfo(uuid, serverAddr, lastUsed);
+                })
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Marks an XA connection as invalid by its UUID.
+     * This causes the connection pool to naturally replace it without
+     * disrupting the server-side session immediately. The pool's validation
+     * mechanism will detect the invalid connection and close it properly,
+     * triggering session termination.
+     * 
+     * @param connectionUUID The UUID of the connection to mark invalid
+     */
+    public void markConnectionInvalid(String connectionUUID) {
+        // Find the connection by UUID (using identity hash code)
+        Connection toMark = null;
+        for (Connection conn : connectionToServerMap.keySet()) {
+            if (String.valueOf(System.identityHashCode(conn)).equals(connectionUUID)) {
+                toMark = conn;
+                break;
+            }
+        }
+        
+        if (toMark != null) {
+            // Cast to OJP Connection to access markForceInvalid method
+            if (toMark instanceof org.openjproxy.jdbc.Connection) {
+                ((org.openjproxy.jdbc.Connection) toMark).markForceInvalid();
+                log.debug("Marked connection {} as invalid for pool replacement", connectionUUID);
+            } else {
+                log.warn("Connection {} is not an OJP Connection, cannot mark invalid", connectionUUID);
+            }
+            // Note: Don't remove from tracker - let the pool handle cleanup via unregister()
+        } else {
+            log.warn("Connection {} not found for marking invalid", connectionUUID);
+        }
     }
 }

@@ -52,6 +52,7 @@ public class MultinodeConnectionManager {
     private final HealthCheckValidator healthCheckValidator;
     private final ConnectionTracker connectionTracker;
     private final ConnectionRedistributor connectionRedistributor;
+    private XAConnectionRedistributor xaConnectionRedistributor;
     
     public MultinodeConnectionManager(List<ServerEndpoint> serverEndpoints) {
         this(serverEndpoints, CommonConstants.DEFAULT_MULTINODE_RETRY_ATTEMPTS, 
@@ -277,6 +278,13 @@ public class MultinodeConnectionManager {
      */
     public ConnectionTracker getConnectionTracker() {
         return connectionTracker;
+    }
+    
+    /**
+     * Gets the health check configuration.
+     */
+    public HealthCheckConfig getHealthCheckConfig() {
+        return healthCheckConfig;
     }
     
     /**
@@ -868,6 +876,43 @@ public class MultinodeConnectionManager {
     }
     
     /**
+     * Sets the XA connection redistributor for rebalancing connections on server recovery.
+     * 
+     * @param redistributor The redistributor to use
+     */
+    public void setXaConnectionRedistributor(XAConnectionRedistributor redistributor) {
+        this.xaConnectionRedistributor = redistributor;
+        log.info("XA connection redistributor registered");
+    }
+    
+    /**
+     * Validates or creates a channel for the given endpoint.
+     * Used by the redistributor and health check systems.
+     * 
+     * @param endpoint The server endpoint to validate/create channel for
+     */
+    public void validateOrCreateChannelForEndpoint(ServerEndpoint endpoint) {
+        if (endpoint == null) {
+            return;
+        }
+        
+        String addr = endpoint.getAddress();
+        ChannelAndStub cas = channelMap.get(endpoint);
+        if (cas != null && !cas.channel.isShutdown() && !cas.channel.isTerminated()) {
+            log.debug("Channel for {} is valid", addr);
+            return;
+        }
+        
+        // Channel doesn't exist or is invalid, create a new one
+        try {
+            createChannelAndStub(endpoint);
+            log.info("Created/validated channel for endpoint: {}", addr);
+        } catch (Exception e) {
+            log.error("Failed to create channel for endpoint {}: {}", addr, e.getMessage());
+        }
+    }
+    
+    /**
      * Phase 2: Notifies all listeners that a server became unhealthy.
      * 
      * @param endpoint The server endpoint that became unhealthy
@@ -886,6 +931,7 @@ public class MultinodeConnectionManager {
     
     /**
      * Phase 2: Notifies all listeners that a server recovered.
+     * Also triggers XA connection redistribution if configured.
      * 
      * @param endpoint The server endpoint that recovered
      */
@@ -896,6 +942,19 @@ public class MultinodeConnectionManager {
             } catch (Exception e) {
                 log.error("Error notifying listener of recovered server {}: {}", 
                         endpoint.getAddress(), e.getMessage(), e);
+            }
+        }
+        
+        // Trigger XA connection redistribution if configured
+        if (xaConnectionRedistributor != null && healthCheckConfig.isRedistributionEnabled()) {
+            List<ServerEndpoint> allHealthyServers = serverEndpoints.stream()
+                    .filter(ServerEndpoint::isHealthy)
+                    .collect(Collectors.toList());
+            
+            try {
+                xaConnectionRedistributor.rebalance(List.of(endpoint), allHealthyServers);
+            } catch (Exception e) {
+                log.error("Error during XA connection redistribution: {}", e.getMessage(), e);
             }
         }
     }
