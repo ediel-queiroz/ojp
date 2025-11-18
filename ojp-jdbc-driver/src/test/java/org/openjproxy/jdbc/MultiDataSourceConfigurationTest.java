@@ -46,8 +46,8 @@ public class MultiDataSourceConfigurationTest {
         UrlParser.UrlParseResult result1 = UrlParser.parseUrlWithDataSource("jdbc:ojp[localhost:10591(default),localhost:10592(multinode)]_h2:~/test");
 
         assertEquals("jdbc:ojp[localhost:10591,localhost:10592]_h2:~/test", result1.cleanUrl);
-        assertEquals("multinode", result1.dataSourceName);
-
+        assertEquals("default", result1.dataSourceNames.get(0));
+        assertEquals("multinode", result1.dataSourceNames.get(1));
     }
 
     
