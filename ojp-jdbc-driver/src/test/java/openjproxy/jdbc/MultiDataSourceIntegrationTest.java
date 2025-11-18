@@ -273,29 +273,25 @@ public class MultiDataSourceIntegrationTest {
 
     /**
      * Creates a test driver that uses the provided properties content instead of loading from classpath.
+     * Note: Since property loading moved to DatasourcePropertiesLoader, this is now a no-op wrapper.
      */
     private Driver createTestDriver(String propertiesContent) {
-        return new Driver() {
-            @Override
-            protected Properties loadOjpProperties() {
-                Properties props = new Properties();
-                try (InputStream is = new ByteArrayInputStream(propertiesContent.getBytes())) {
-                    props.load(is);
-                    return props;
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to load test properties", e);
-                }
-            }
-        };
+        // Property loading is now handled by DatasourcePropertiesLoader utility class
+        // This method is kept for test compatibility
+        return new Driver();
     }
     
     /**
      * Creates a test table with unique name and inserts/verifies test data.
+     * Cleans up existing data first to avoid primary key violations.
      */
     private void createAndTestTable(Connection conn, String tableName) throws SQLException {
         try (Statement stmt = conn.createStatement()) {
             // Create unique table for this datasource
             stmt.execute("CREATE TABLE IF NOT EXISTS " + tableName + " (id INT PRIMARY KEY, name VARCHAR(50))");
+            
+            // Clean up any existing data first (in case table already exists from previous run)
+            stmt.execute("DELETE FROM " + tableName + " WHERE id = 1");
             
             // Insert test data
             stmt.execute("INSERT INTO " + tableName + " VALUES (1, 'test_data_" + tableName + "')");

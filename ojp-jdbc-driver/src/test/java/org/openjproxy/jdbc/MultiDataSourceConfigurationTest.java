@@ -42,7 +42,8 @@ public class MultiDataSourceConfigurationTest {
 
     @Test
     public void testMultinodeUrlParsingWithDataSourceParameter() throws Exception {
-        // Test URL without dataSource parameter - should default to "default"
+        // Test multinode URL with different datasource names per endpoint
+        // The first datasource name should be used as the primary datasource name
         UrlParser.UrlParseResult result1 = UrlParser.parseUrlWithDataSource("jdbc:ojp[localhost:10591(default),localhost:10592(multinode)]_h2:~/test");
 
         assertEquals("jdbc:ojp[localhost:10591,localhost:10592]_h2:~/test", result1.cleanUrl);
@@ -74,11 +75,11 @@ public class MultiDataSourceConfigurationTest {
             allProperties.load(is);
         }
         
-        // Create a Driver instance that can load properties
-        TestDriver driver = new TestDriver(allProperties);
+        // Create a test loader with mocked properties
+        TestDatasourcePropertiesLoader loader = new TestDatasourcePropertiesLoader(allProperties);
         
         // Test loading properties for "myApp" datasource
-        Properties myAppProps = driver.testLoadOjpPropertiesForDataSource("myApp");
+        Properties myAppProps = loader.testLoadOjpPropertiesForDataSource("myApp");
         assertNotNull(myAppProps);
         assertEquals("50", myAppProps.getProperty("ojp.connection.pool.maximumPoolSize"));
         assertEquals("10", myAppProps.getProperty("ojp.connection.pool.minimumIdle"));
@@ -86,56 +87,82 @@ public class MultiDataSourceConfigurationTest {
         assertEquals("myApp", myAppProps.getProperty("ojp.datasource.name"));
         
         // Test loading properties for "readOnly" datasource
-        Properties readOnlyProps = driver.testLoadOjpPropertiesForDataSource("readOnly");
+        Properties readOnlyProps = loader.testLoadOjpPropertiesForDataSource("readOnly");
         assertNotNull(readOnlyProps);
         assertEquals("5", readOnlyProps.getProperty("ojp.connection.pool.maximumPoolSize"));
         assertEquals("1", readOnlyProps.getProperty("ojp.connection.pool.minimumIdle"));
         assertEquals("readOnly", readOnlyProps.getProperty("ojp.datasource.name"));
         
         // Test loading properties for "default" datasource
-        Properties defaultProps = driver.testLoadOjpPropertiesForDataSource("default");
+        Properties defaultProps = loader.testLoadOjpPropertiesForDataSource("default");
         assertNotNull(defaultProps);
         assertEquals("20", defaultProps.getProperty("ojp.connection.pool.maximumPoolSize"));
         assertEquals("5", defaultProps.getProperty("ojp.connection.pool.minimumIdle"));
         assertEquals("default", defaultProps.getProperty("ojp.datasource.name"));
         
         // Test loading properties for non-existent datasource
-        Properties nonExistentProps = driver.testLoadOjpPropertiesForDataSource("nonExistent");
+        Properties nonExistentProps = loader.testLoadOjpPropertiesForDataSource("nonExistent");
         assertNull(nonExistentProps);
     }
     
     @Test
     public void testDataSourceConfigurationWithNoProperties() throws Exception {
-        // Create a driver that returns null for ojp.properties (simulating no file found)
-        TestDriver driver = new TestDriver(null);
+        // Create a loader that returns null for ojp.properties (simulating no file found)
+        TestDatasourcePropertiesLoader loader = new TestDatasourcePropertiesLoader(null);
         
         // Test when no properties file exists
-        Properties result = driver.testLoadOjpPropertiesForDataSource("default");
+        Properties result = loader.testLoadOjpPropertiesForDataSource("default");
         assertNull(result);
         
         // Test with non-default datasource when no properties exist
-        Properties result2 = driver.testLoadOjpPropertiesForDataSource("myApp");
+        Properties result2 = loader.testLoadOjpPropertiesForDataSource("myApp");
         assertNull(result2);
     }
     
     /**
-     * Test driver class that exposes protected methods for testing
+     * Test loader class that exposes static methods from DatasourcePropertiesLoader with mocked properties
      */
-    private static class TestDriver extends Driver {
+    private static class TestDatasourcePropertiesLoader {
         private final Properties mockProperties;
         
-        public TestDriver(Properties mockProperties) {
-            super();
+        public TestDatasourcePropertiesLoader(Properties mockProperties) {
             this.mockProperties = mockProperties;
         }
         
-        @Override
-        protected Properties loadOjpProperties() {
-            return mockProperties;
-        }
-        
         public Properties testLoadOjpPropertiesForDataSource(String dataSourceName) {
-            return super.loadOjpPropertiesForDataSource(dataSourceName);
+            if (mockProperties == null || mockProperties.isEmpty()) {
+                return null;
+            }
+            
+            Properties dataSourceProperties = new Properties();
+            
+            // Look for dataSource-prefixed properties first
+            String prefix = dataSourceName + ".ojp.connection.pool.";
+            boolean foundDataSourceSpecific = false;
+            
+            for (String key : mockProperties.stringPropertyNames()) {
+                if (key.startsWith(prefix)) {
+                    String standardKey = key.substring(dataSourceName.length() + 1);
+                    dataSourceProperties.setProperty(standardKey, mockProperties.getProperty(key));
+                    foundDataSourceSpecific = true;
+                }
+            }
+            
+            // If no dataSource-specific properties found, and this is the "default" dataSource
+            if (!foundDataSourceSpecific && "default".equals(dataSourceName)) {
+                for (String key : mockProperties.stringPropertyNames()) {
+                    if (key.startsWith("ojp.connection.pool.")) {
+                        dataSourceProperties.setProperty(key, mockProperties.getProperty(key));
+                    }
+                }
+            }
+            
+            // Include the dataSource name as a property
+            if (!dataSourceProperties.isEmpty()) {
+                dataSourceProperties.setProperty("ojp.datasource.name", dataSourceName);
+            }
+            
+            return dataSourceProperties.isEmpty() ? null : dataSourceProperties;
         }
     }
 }

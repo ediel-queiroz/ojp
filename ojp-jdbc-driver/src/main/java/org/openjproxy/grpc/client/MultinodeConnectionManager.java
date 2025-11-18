@@ -1,19 +1,24 @@
 package org.openjproxy.grpc.client;
 
 import com.openjproxy.grpc.ConnectionDetails;
+import com.openjproxy.grpc.PropertyEntry;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.StatementServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.StatusRuntimeException;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.GrpcChannelFactory;
+import org.openjproxy.grpc.ProtoConverter;
+import org.openjproxy.jdbc.DatasourcePropertiesLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -277,6 +282,11 @@ public class MultinodeConnectionManager {
     /**
      * Connects to a single server using round-robin selection.
      * Used for XA connections to ensure proper load distribution.
+     * 
+     * Quick Fix for XA Mode: After selecting a server, checks if the selected server's
+     * datasource differs from the properties in ConnectionDetails. If different, reloads
+     * properties for the selected server's datasource and rebuilds ConnectionDetails.
+     * This ensures each server receives properties for ITS OWN datasource.
      */
     private SessionInfo connectToSingleServer(ConnectionDetails connectionDetails) throws SQLException {
         ServerEndpoint selectedServer = selectHealthyServer();
@@ -288,13 +298,30 @@ public class MultinodeConnectionManager {
         log.info("===XA connection: selected server {} via round-robin (counter={}) ===", 
                 selectedServer.getAddress(), roundRobinCounter.get() - 1);
         
+        // Quick Fix: Check if selected server's datasource differs from ConnectionDetails datasource
+        String selectedServerDataSource = selectedServer.getDataSourceName();
+        String connectionDetailsDataSource = extractDataSourceNameFromConnectionDetails(connectionDetails);
+        
+        log.info("Selected server datasource: '{}', ConnectionDetails datasource: '{}'", 
+                selectedServerDataSource, connectionDetailsDataSource);
+        
+        // If datasources differ, reload properties for the selected server's datasource
+        if (!selectedServerDataSource.equals(connectionDetailsDataSource)) {
+            log.info("Datasource mismatch detected! Reloading properties for selected server's datasource: '{}'", 
+                    selectedServerDataSource);
+            connectionDetails = rebuildConnectionDetailsWithDataSource(connectionDetails, selectedServerDataSource);
+        } else {
+            log.debug("Datasource match - using existing properties for datasource: '{}'", selectedServerDataSource);
+        }
+        
         try {
             ChannelAndStub channelAndStub = channelMap.get(selectedServer);
             if (channelAndStub == null) {
                 channelAndStub = createChannelAndStub(selectedServer);
             }
             
-            log.info("Connecting to server {} (XA)", selectedServer.getAddress());
+            log.info("Connecting to server {} (XA) with datasource '{}'", 
+                    selectedServer.getAddress(), selectedServerDataSource);
             SessionInfo sessionInfo = channelAndStub.blockingStub.connect(connectionDetails);
             
             // Mark server as healthy
@@ -324,7 +351,8 @@ public class MultinodeConnectionManager {
                 log.info("Tracked 1 server for XA connection hash {}", sessionInfo.getConnHash());
             }
             
-            log.info("Successfully connected to server {} (XA)", selectedServer.getAddress());
+            log.info("Successfully connected to server {} (XA) with datasource '{}'", 
+                    selectedServer.getAddress(), selectedServerDataSource);
             return sessionInfo;
             
         } catch (StatusRuntimeException e) {
@@ -870,6 +898,63 @@ public class MultinodeConnectionManager {
                         endpoint.getAddress(), e.getMessage(), e);
             }
         }
+    }
+    
+    /**
+     * Extracts the datasource name from ConnectionDetails properties.
+     * Returns the value of "ojp.datasource.name" property, or "default" if not found.
+     * 
+     * @param connectionDetails The ConnectionDetails to extract from
+     * @return The datasource name, or "default" if not specified
+     */
+    private String extractDataSourceNameFromConnectionDetails(ConnectionDetails connectionDetails) {
+        if (connectionDetails == null || connectionDetails.getPropertiesList().isEmpty()) {
+            return "default";
+        }
+        
+        for (PropertyEntry prop : connectionDetails.getPropertiesList()) {
+            if (CommonConstants.DATASOURCE_NAME_PROPERTY.equals(prop.getKey())) {
+                return prop.getStringValue();
+            }
+        }
+        
+        return "default";
+    }
+    
+    /**
+     * Rebuilds ConnectionDetails with properties for a specific datasource.
+     * Used in XA mode to ensure the selected server receives properties for its datasource.
+     * 
+     * @param originalDetails The original ConnectionDetails
+     * @param dataSourceName The datasource name to load properties for
+     * @return New ConnectionDetails with updated properties
+     */
+    private ConnectionDetails rebuildConnectionDetailsWithDataSource(
+            ConnectionDetails originalDetails, String dataSourceName) {
+        
+        log.info("Reloading properties for datasource: {}", dataSourceName);
+        
+        // Load properties for the specified datasource
+        Properties dsProperties = DatasourcePropertiesLoader.loadOjpPropertiesForDataSource(dataSourceName);
+        
+        // Rebuild ConnectionDetails with new properties
+        ConnectionDetails.Builder builder = ConnectionDetails.newBuilder(originalDetails)
+                .clearProperties();
+        
+        if (dsProperties != null && !dsProperties.isEmpty()) {
+            // Convert Properties to Map<String, Object>
+            Map<String, Object> propertiesMap = new HashMap<>();
+            for (String key : dsProperties.stringPropertyNames()) {
+                propertiesMap.put(key, dsProperties.getProperty(key));
+            }
+            builder.addAllProperties(ProtoConverter.propertiesToProto(propertiesMap));
+            log.info("Rebuilt ConnectionDetails with {} properties for datasource: {}", 
+                    propertiesMap.size(), dataSourceName);
+        } else {
+            log.info("No properties found for datasource: {}, using defaults", dataSourceName);
+        }
+        
+        return builder.build();
     }
     
     /**
