@@ -7,7 +7,7 @@ To integrate OJP into your Spring Boot project follow the steps:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>[TBD]</version>
+    <version>0.2.0-beta</version>
 </dependency>
 ```
 
