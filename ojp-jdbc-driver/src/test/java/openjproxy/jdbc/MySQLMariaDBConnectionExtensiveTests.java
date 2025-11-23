@@ -258,11 +258,7 @@ public class MySQLMariaDBConnectionExtensiveTests {
         
         // Test setting holdability
         connection.setHoldability(ResultSet.HOLD_CURSORS_OVER_COMMIT);
-        //MySQL does not support cursor holdability.
-        if (url.toLowerCase().contains("mysql"))
-            Assert.assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, connection.getHoldability());
-        else
-            Assert.assertEquals(ResultSet.HOLD_CURSORS_OVER_COMMIT, connection.getHoldability());
+        Assert.assertEquals(ResultSet.HOLD_CURSORS_OVER_COMMIT, connection.getHoldability());
     }
 
     @ParameterizedTest
